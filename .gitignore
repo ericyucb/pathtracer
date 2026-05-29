@@ -1,0 +1,5 @@
+/.vscode
+build/
+*.tga
+.DS_Store
+
