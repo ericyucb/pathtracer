@@ -10,15 +10,21 @@ find_library(METAL_FRAMEWORK Metal REQUIRED)
 find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
 find_library(QUARTZ_FRAMEWORK QuartzCore REQUIRED)
 
+set(CMAKE_PREFIX_PATH "/opt/homebrew" ${CMAKE_PREFIX_PATH})
+find_package(SDL2 REQUIRED)
+
 # 2. Define Executable and Source Files
 add_executable(${PROJECT_NAME} main.cpp)
 
 # 3. Include metal-cpp headers
-target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/metal-cpp)
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal-cpp
+    ${SDL2_INCLUDE_DIRS})
 
 # 4. Link everything together
-target_link_libraries(${PROJECT_NAME} PRIVATE 
-    ${METAL_FRAMEWORK} 
-    ${FOUNDATION_FRAMEWORK} 
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    ${METAL_FRAMEWORK}
+    ${FOUNDATION_FRAMEWORK}
     ${QUARTZ_FRAMEWORK}
+    ${SDL2_LIBRARIES}
 )

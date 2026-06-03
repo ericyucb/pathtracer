@@ -26,6 +26,7 @@ kernel void render_kernel(
     uv *= 2.0f;
     uv -= 1.0f;
     uv.x *= (float)outTexture.get_width() / (float)outTexture.get_height(); // aspect ratio fix
+    uv.y = -uv.y; // Metal's y=0 is top, flip so y=0 is bottom
 
 
     //Predefine variables for now (drawing a sphere)
@@ -33,7 +34,7 @@ kernel void render_kernel(
     float3 center = {0, 0, 0}; // center of sphere
     float r = 0.8f; /// radius
 
-    float3 a = {0, 0, 2.0f}; // ray start
+    float3 a = {0, 0, 5.0f}; // ray start
     float3 b = normalize(float3(uv, -1.0f)); // ray direction -> this points the ray at the pixel
 
     //Quadratic fomrula dot(b, b) t^2 + 2(dot(a, b) - dot(b, center)) t + c = 0
