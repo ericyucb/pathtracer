@@ -13,6 +13,12 @@
 #include <SDL2/SDL_metal.h>
 #include <Metal/Metal.hpp>
 #include <QuartzCore/QuartzCore.hpp>
+#include <simd/simd.h>
+
+#include "camera.h"
+
+#include "ray.h"
+#include "scene.h"
 
 
 std::string ReadShaderSource(const std::string& filePath) {
@@ -62,6 +68,29 @@ int main() {
     layer->setDrawableSize(CGSizeMake(width, height));
     SDL_RaiseWindow(window);
 
+    Camera camera(simd::float4{0.0f, 0.0f, 5.0f,0}, simd::float4{0.0f, 0.0f, -1.0f,0}, 0, 0);
+    MTL::Buffer* cameraBuffer = device->newBuffer(sizeof(Ray), MTL::ResourceStorageModeShared);
+
+    Sphere s1;
+    s1.position = {0, 0, 0};
+    s1.radius   = 0.8f;
+    s1.color    = {1, 0.2f, 0.2f};
+
+    Sphere s2;
+    s2.position = {0, -3, 0};
+    s2.radius   = 10;               
+    s2.color    = {0.2f, 0.8f, 0.2f}; 
+
+    Sphere s3;
+    s3.position = {0, 0, -5};
+    s3.radius   = 5;
+    s3.color    = {0.2f, 0.4f, 1}; 
+
+    Scene scene;
+    scene.objects.push_back(s1);
+    scene.objects.push_back(s2);
+    scene.objects.push_back(s3);
+
     // 4. Render loop
     bool running = true;
     SDL_Event event;
@@ -70,14 +99,31 @@ int main() {
             if (event.type == SDL_QUIT) running = false;
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) running = false;
         }
+        const int factor = 10.0f;
+        const float speed = 0.05f;
+        const uint8_t* keys = SDL_GetKeyboardState(nullptr);
+        if (keys[SDL_SCANCODE_W]) camera.moveZ(speed);
+        if (keys[SDL_SCANCODE_S]) camera.moveZ(-speed);
+        if (keys[SDL_SCANCODE_A]) camera.moveX(-speed);
+        if (keys[SDL_SCANCODE_D]) camera.moveX(speed);
+        if (keys[SDL_SCANCODE_UP]) camera.pitch(speed * factor);
+        if (keys[SDL_SCANCODE_DOWN]) camera.pitch(-speed * factor);
+        if (keys[SDL_SCANCODE_LEFT]) camera.yaw(-speed * factor);
+        if (keys[SDL_SCANCODE_RIGHT]) camera.yaw(speed * factor);
 
         CA::MetalDrawable* drawable = layer->nextDrawable();
         if (!drawable) continue;
 
         MTL::CommandBuffer* cmdBuffer = commandQueue->commandBuffer();
         MTL::ComputeCommandEncoder* encoder = cmdBuffer->computeCommandEncoder();
+        
+        Ray* r = camera.getRay();
+        
+        memcpy(cameraBuffer->contents(), r, sizeof(Ray));
+
         encoder->setComputePipelineState(pipeline);
         encoder->setTexture(drawable->texture(), 0);
+        encoder->setBuffer(cameraBuffer, 0, 0);
         encoder->dispatchThreads(MTL::Size(width, height, 1), MTL::Size(16, 16, 1));
         encoder->endEncoding();
         cmdBuffer->presentDrawable(drawable);

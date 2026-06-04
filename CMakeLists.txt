@@ -14,7 +14,7 @@ set(CMAKE_PREFIX_PATH "/opt/homebrew" ${CMAKE_PREFIX_PATH})
 find_package(SDL2 REQUIRED)
 
 # 2. Define Executable and Source Files
-add_executable(${PROJECT_NAME} main.cpp)
+add_executable(${PROJECT_NAME} main.cpp camera.cpp)
 
 # 3. Include metal-cpp headers
 target_include_directories(${PROJECT_NAME} PRIVATE

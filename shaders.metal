@@ -14,8 +14,14 @@ using namespace metal;
 //   - [[thread_position_in_grid]] — Metal automatically fills this in with the pixel coordinate of the current thread. So for the thread handling pixel (42, 100), pos.x = 42 and pos.y = 100
 
 //   The [[ ]] syntax is Metal's way of marking special GPU-provided values. You don't pass these in yourself — Metal injects them automatically based on how the threads were dispatched.
+struct Ray {
+    float4 position;
+    float4 direction;
+};
+
 kernel void render_kernel(
     texture2d<float, access::write> outTexture [[texture(0)]],
+    constant Ray& camera [[buffer(0)]],
     uint2 pos [[thread_position_in_grid]])
 {
     if (pos.x >= outTexture.get_width() || pos.y >= outTexture.get_height()) return;
@@ -26,17 +32,22 @@ kernel void render_kernel(
     uv *= 2.0f;
     uv -= 1.0f;
     uv.x *= (float)outTexture.get_width() / (float)outTexture.get_height(); // aspect ratio fix
-    uv.y = -uv.y; // Metal's y=0 is top, flip so y=0 is bottom
+    uv.y = -uv.y; 
 
 
     //Predefine variables for now (drawing a sphere)
 
     float3 center = {0, 0, 0}; // center of sphere
     float r = 0.8f; /// radius
+    float fov = 60.0f;
+    float fovScale = tan(fov * 0.5f * 3.14159f / 180.0f); // 60 degree FOV
 
-    float3 a = {0, 0, 5.0f}; // ray start
-    float3 b = normalize(float3(uv, -1.0f)); // ray direction -> this points the ray at the pixel
-
+    float3 a = camera.position.xyz;
+    float3 dir = camera.direction.xyz; //forward direction
+    float3 sub = float3(0,1,0) * dot(dir, float3(0,1,0)); //gives how much the up vector points in the forward direction
+    float3 up = normalize(float3(0, 1, 0) - sub); //removes the foward component
+    float3 right = normalize(cross(dir, up));
+    float3 b = normalize(dir + uv.x * fovScale * right + uv.y * fovScale * up); // move to the coordinate point in the new basis
     //Quadratic fomrula dot(b, b) t^2 + 2(dot(a, b) - dot(b, center)) t + c = 0
     // c = dot(a, a) - 2 dot(a, center) + dot(center, center) - dot(r, r)
 
@@ -58,23 +69,29 @@ kernel void render_kernel(
     float t1;
     float t2;
     float3 h1;
-    float3 h2;
+    // float3 h2;
 
     float3 lightDirection = normalize(float3(-1.0f, -1.0f, -1.0f));
 
     if (discriminant >= 0) { // at least one solution -> fill in the pixel because that indicates an intersection
         t1 = (-linear_coefficient - sqrt(discriminant))/ 2.0f*squared_coefficient;
-        t2 = (-linear_coefficient + sqrt(discriminant))/ 2.0f*squared_coefficient;
+        // t2 = (-linear_coefficient + sqrt(discriminant))/ 2.0f*squared_coefficient;
+        if (t1 > 0) {
+            h1 = a + b * t1; // first intersection -> hitpoint
+            // h2 = a + b * t2;
 
-        h1 = a + b * t1; // first intersection -> hitpoint
-        h2 = a + b * t2;
+            float3 h1_normal_vector = normalize(h1 - center);
 
-        float3 h1_normal_vector = normalize(h1 - center);
+            float lightIntensity = max(dot(-lightDirection, h1_normal_vector), 0.0f); //scaled between 0 and 1
 
-        float lightIntensity = max(dot(-lightDirection, h1_normal_vector), 0.0f); //scaled between 0 and 1
+            float3 sphereColor = float3(0.5f, 0.0f, 1.0f);
+            outTexture.write(float4(sphereColor * lightIntensity,  1.0f), pos);
 
-        float3 sphereColor = float3(0.5f, 0.0f, 1.0f);
-        outTexture.write(float4(sphereColor * lightIntensity,  1.0f), pos);
+        } else {
+            outTexture.write(float4(0.0f, 0.0f, 0.0f, 1.0f), pos);
+
+        }
+       
 
     } else { //the ray doesn't intersect with the sphere -> don't fill in the pixel
         outTexture.write(float4(0.0f, 0.0f, 0.0f, 1.0f), pos);
