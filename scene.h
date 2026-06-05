@@ -1,13 +1,12 @@
+#pragma once
 #include <simd/simd.h>
-
 #include <vector>
+
 struct Sphere {
-    simd::float3 position; 
-    float radius;
-    simd::float3 color;
+    simd::float4 positionAndRadius;  // xyz = center, w = radius
+    simd::float4 color;              // xyz = rgb, w unused
 };
 
 struct Scene {
     std::vector<Sphere> objects;
-    //TODO: add textures
 };

@@ -66,30 +66,32 @@ int main() {
     layer->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
     layer->setFramebufferOnly(false);
     layer->setDrawableSize(CGSizeMake(width, height));
+    layer->setDisplaySyncEnabled(true);
     SDL_RaiseWindow(window);
 
     Camera camera(simd::float4{0.0f, 0.0f, 5.0f,0}, simd::float4{0.0f, 0.0f, -1.0f,0}, 0, 0);
     MTL::Buffer* cameraBuffer = device->newBuffer(sizeof(Ray), MTL::ResourceStorageModeShared);
 
+
     Sphere s1;
-    s1.position = {0, 0, 0};
-    s1.radius   = 0.8f;
-    s1.color    = {1, 0.2f, 0.2f};
+    s1.positionAndRadius = simd_make_float4(0, 0, 0, 0.8f);
+    s1.color = simd_make_float4(1, 0.2f, 0.2f, 0);
 
     Sphere s2;
-    s2.position = {0, -3, 0};
-    s2.radius   = 10;               
-    s2.color    = {0.2f, 0.8f, 0.2f}; 
+    s2.positionAndRadius = simd_make_float4(2, 0, 0, 0.8f);
+    s2.color = simd_make_float4(0.2f, 0.8f, 0.2f, 0);
 
-    Sphere s3;
-    s3.position = {0, 0, -5};
-    s3.radius   = 5;
-    s3.color    = {0.2f, 0.4f, 1}; 
+    // Sphere s3;
+    // s3.position = {0, -15, 0};
+    // s3.radius   = 5;
+    // s3.color    = {0.2f, 0.4f, 1}; 
 
     Scene scene;
     scene.objects.push_back(s1);
     scene.objects.push_back(s2);
-    scene.objects.push_back(s3);
+    // scene.objects.push_back(s3);
+
+    MTL::Buffer* objectBuffer = device->newBuffer(scene.objects.size() * sizeof(Sphere), MTL::ResourceStorageModeShared);
 
     // 4. Render loop
     bool running = true;
@@ -120,10 +122,12 @@ int main() {
         Ray* r = camera.getRay();
         
         memcpy(cameraBuffer->contents(), r, sizeof(Ray));
+        memcpy(objectBuffer->contents(), scene.objects.data(), scene.objects.size()*sizeof(Sphere));
 
         encoder->setComputePipelineState(pipeline);
         encoder->setTexture(drawable->texture(), 0);
         encoder->setBuffer(cameraBuffer, 0, 0);
+        encoder->setBuffer(objectBuffer, 0, 1);
         encoder->dispatchThreads(MTL::Size(width, height, 1), MTL::Size(16, 16, 1));
         encoder->endEncoding();
         cmdBuffer->presentDrawable(drawable);

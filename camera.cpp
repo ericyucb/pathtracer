@@ -1,4 +1,5 @@
 #include "camera.h"
+#include <algorithm>
 
 Camera::Camera(simd::float4 position, simd::float4 direction, float yaw, float pitch) {
     ray = new Ray();
@@ -9,7 +10,9 @@ Camera::Camera(simd::float4 position, simd::float4 direction, float yaw, float p
 }
 
 void Camera::moveX(float dx) {
-    ray->position += simd::float4{dx, 0, 0, 0};
+    simd::float3 forward = {ray->direction.x, ray->direction.y, ray->direction.z};
+    simd::float3 right = simd::normalize(simd::cross(forward, simd::float3{0, 1, 0}));
+    ray->position += simd::float4{right.x * dx, right.y * dx, right.z * dx, 0};
 }
 
 void Camera::moveY(float dy) {
@@ -27,6 +30,8 @@ void Camera::yaw(float angle) {
 
 void Camera::pitch(float angle){
     xAngle += (angle * M_PI / 180.0f);
+    float limit = (float)M_PI / 2.0f - 0.01f;
+    xAngle = std::max(-limit, std::min(limit, xAngle));
     updateDirection();
 }
 
