@@ -88,6 +88,7 @@ metadata Miss(){
 
 };
 metadata TraceRay(thread Ray& ray, constant Sphere* objects, int count){
+    
 
     float closestDistance = -1;
     int closestSphere = -1;
@@ -171,6 +172,7 @@ kernel void render_kernel(
     uint2 pos [[thread_position_in_grid]])
 {
     if (pos.x >= outTexture.get_width() || pos.y >= outTexture.get_height()) return;
+    uint seed = pos.x + pos.y * outTexture.get_width() + frameIndex * 719393u; //719... is a prime to encourage randomness 
 
     // scale coordinates to between -1, 1
     float2 uv = float2(pos) / float2(outTexture.get_width(), outTexture.get_height());
@@ -178,6 +180,8 @@ kernel void render_kernel(
     uv -= 1.0f;
     uv.x *= (float)outTexture.get_width() / (float)outTexture.get_height(); // aspect ratio fix
     uv.y = -uv.y; 
+    uv += float2(randFloat(seed) - 0.5f, randFloat(seed) - 0.5f) / float2(outTexture.get_width(),
+    outTexture.get_height());
     float fov = 60.0f;
     float fovScale = tan(fov * 0.5f * 3.14159f / 180.0f); // 60 degree FOV
     
@@ -194,7 +198,6 @@ kernel void render_kernel(
     float3 light = float3(0, 0, 0);
     int bounces = 30;
     float3 lightContribution = float3(1.0f, 1.0f, 1.0f);
-    uint seed = pos.x + pos.y * outTexture.get_width() + frameIndex * 719393u; //719... is a prime to encourage randomness 
 
     // float3 lightDirection;
     // float lightIntensity;

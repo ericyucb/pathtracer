@@ -55,7 +55,7 @@ int main() {
 
 
     // 3. SDL window + Metal layer
-    const uint32_t width = 1920, height = 1080;
+    const uint32_t width = 2560, height = 1600;
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window* window = SDL_CreateWindow("Raytracer",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
