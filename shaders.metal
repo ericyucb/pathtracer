@@ -39,12 +39,18 @@ struct Ray {
     float4 direction;
 };
 
-struct Sphere {
-    float4 positionAndRadius;  // xyz = center, w = radius
-    float4 color;              // xyz = rgb, w unused
+struct Material {
+    float4 color; // xyz = rgb, w unused
     float roughness;
     float metallic;
-    float2 padding;
+    float4 emissionColor;
+    float emissionIntensity;
+    float padding;
+};
+
+struct Sphere {
+    float4 positionAndRadius;  // xyz = center, w = radius
+    int materialIndex;
 };
 
 
@@ -158,9 +164,10 @@ kernel void render_kernel(
     texture2d<float, access::write> outTexture [[texture(0)]],
     constant Ray& camera [[buffer(0)]],
     constant Sphere* objects [[buffer(1)]],
-    constant int& sceneCount [[buffer(2)]],
-    device float4* accumulatedColor [[buffer(3)]],
-    constant int& frameIndex [[buffer(4)]],
+    constant Material* materials [[buffer(2)]],
+    constant int& sceneCount [[buffer(3)]],
+    device float4* accumulatedColor [[buffer(4)]],
+    constant int& frameIndex [[buffer(5)]],
     uint2 pos [[thread_position_in_grid]])
 {
     if (pos.x >= outTexture.get_width() || pos.y >= outTexture.get_height()) return;
@@ -184,44 +191,56 @@ kernel void render_kernel(
     ray.position = float4(a, 0);
     ray.direction = float4(b, 0);
 
-    float3 color = float3(0, 0, 0);
-    int bounces = 2;
-    float multiplier = 1.0f;
+    float3 light = float3(0, 0, 0);
+    int bounces = 30;
+    float3 lightContribution = float3(1.0f, 1.0f, 1.0f);
     uint seed = pos.x + pos.y * outTexture.get_width() + frameIndex * 719393u; //719... is a prime to encourage randomness 
 
-    float3 lightDirection;
-    float lightIntensity;
-    float3 sphereColor;
+    // float3 lightDirection;
+    // float lightIntensity;
     for (int i = 0; i < bounces; i ++) {
 
         metadata meta = TraceRay(ray, objects, sceneCount);
 
         if (meta.distance < 0) {
 
-            float3 skyColor = {0.4f, 0.7f, 1.0f};
-            color +=  skyColor * multiplier * 0.2f;
+            // float3 skyColor = {0.4f, 0.7f, 1.0f};
+            // light += skyColor * lightContribution * 0.2f;
             break;
 
         } else{
-            lightDirection = normalize(float3(-1.0f, -1.0f, -1.0f));
+            // lightDirection = normalize(float3(-1.0f, -1.0f, -1.0f));
 
-            lightIntensity = max(dot(-lightDirection, meta.worldNormal.xyz), 0.0f); //scaled between 0 and 1
+            // lightIntensity = max(dot(-lightDirection, meta.worldNormal.xyz), 0.0f); //scaled between 0 and 1
+            int mat_idx = objects[meta.sphereObject].materialIndex;
+            Material sphereMat = materials[mat_idx];
 
-            sphereColor = objects[meta.sphereObject].color.xyz;
+            // light += lightIntensity * sphereMat.color * multiplier;
+            light += sphereMat.emissionIntensity * sphereMat.emissionColor.xyz * lightContribution;
 
-            color += lightIntensity * sphereColor * multiplier;
-            multiplier *= 0.75f;
+            // lightContribution *= 0.75f;
+            //
+//   The reason simple multiplication works is that we're treating color as a per-channel energy scale factor. Each RGB channel is an
+//   independent wavelength band, and the surface's albedo just says "what fraction of incoming energy survives this bounce per channel."
+            lightContribution *= sphereMat.color.xyz; // this can be interpreted as the light being absorbed by the sphere
 
-            float roughness = objects[meta.sphereObject].roughness;
-            float3 diffuseDir = normalize(meta.worldNormal.xyz + roughness * randFloat3(seed, -1.0f, 1.0f));
+
+            // perfect mirror reflection
+            float3 reflectDir = reflect(ray.direction.xyz, meta.worldNormal.xyz);
+            // fully random scatter around the normal (lambertian diffuse)
+            float3 randomDir = normalize(meta.worldNormal.xyz + randFloat3(seed, -1.0f, 1.0f));
+            // blend between mirror and diffuse based on roughness (0 = mirror, 1 = fully diffuse)
+            float3 diffuseDir = normalize(mix(reflectDir, randomDir, sphereMat.roughness));
             ray.position = meta.worldPosition + meta.worldNormal * 0.01;
-            ray.direction = float4(reflect(ray.direction.xyz, diffuseDir), 0);
+            ray.direction = float4(diffuseDir, 0);
         }
     }
     uint idx = outTexture.get_width() * pos.y + pos.x;
     if (frameIndex == 1) accumulatedColor[idx] = float4(0);
-    accumulatedColor[idx] = float4(accumulatedColor[idx].xyz + color, 0);
-    outTexture.write(float4(accumulatedColor[idx].xyz / float(frameIndex), 1.0f), pos);
+    accumulatedColor[idx] = float4(accumulatedColor[idx].xyz + light, 0);
+    float3 averaged = accumulatedColor[idx].xyz / float(frameIndex);
+    float3 tonemapped = averaged / (averaged + 1.0f); // Reinhard tonemapping
+    outTexture.write(float4(tonemapped, 1.0f), pos);
 
 
     

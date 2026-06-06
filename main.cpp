@@ -55,7 +55,7 @@ int main() {
 
 
     // 3. SDL window + Metal layer
-    const uint32_t width = 1280, height = 720;
+    const uint32_t width = 1920, height = 1080;
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window* window = SDL_CreateWindow("Raytracer",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -71,36 +71,53 @@ int main() {
 
     Camera camera(simd::float4{0.0f, 0.0f, 5.0f,0}, simd::float4{0.0f, 0.0f, -1.0f,0}, 0, 0);
 
-
-    Sphere s1;
-    s1.positionAndRadius = simd_make_float4(0, 0, 0, 0.8f);
-    s1.color = simd_make_float4(1, 0.2f, 0.2f, 0);
-    s1.roughness = 0.01;
-    
-
-    Sphere s2;
-    s2.positionAndRadius = simd_make_float4(0, -101, 0, 100.0f);
-    s2.color = simd_make_float4(0.2f, 0.6f, 0.9f, 0);
-    s2.roughness = 0.01;
-
-
-
-    int sceneCount = 2;
-
-    // Sphere s3;
-    // s3.position = {0, -15, 0};
-    // s3.radius   = 5;
-    // s3.color    = {0.2f, 0.4f, 1}; 
-
     Scene scene;
-    scene.objects.push_back(s1);
-    scene.objects.push_back(s2);
+
+    // red object sphere
+    Material mObject = {};
+    mObject.color = simd_make_float4(1, 0.2f, 0.2f, 0);
+    mObject.roughness = 0.5f;
+    scene.materials.push_back(mObject);
+
+    // grey ground
+    Material mGround = {};
+    mGround.color = simd_make_float4(0.4f, 0.4f, 0.4f, 0);
+    mGround.roughness = 1.0f;
+    scene.materials.push_back(mGround);
+
+    // white light source
+    Material mLight = {};
+    mLight.color = simd_make_float4(0, 0, 0, 0);
+    mLight.roughness = 1.0f;
+    mLight.emissionColor = simd_make_float4(1, 1, 1, 0);
+    mLight.emissionIntensity = 20.0f;
+    scene.materials.push_back(mLight);
+
+    Sphere sObject;
+    sObject.positionAndRadius = simd_make_float4(0, 0, 0, 0.8f);
+    sObject.materialIndex = 0;
+
+    Sphere sGround;
+    sGround.positionAndRadius = simd_make_float4(0, -101, 0, 100.0f);
+    sGround.materialIndex = 1;
+
+    Sphere sLight;
+    sLight.positionAndRadius = simd_make_float4(4, 3, 0, 2.5f); // light at 45 degrees, lower and larger
+    sLight.materialIndex = 2;
+
+    int sceneCount = 3;
+
+    scene.objects.push_back(sObject);
+    scene.objects.push_back(sGround);
+    scene.objects.push_back(sLight);
+    
     // scene.objects.push_back(s3);
 
     int frameIndex = 1; //this represents how many frames we have accumulated, this is reset back to 1 whenever the camera moves 
 
     MTL::Buffer* cameraBuffer = device->newBuffer(sizeof(Ray), MTL::ResourceStorageModeShared);
     MTL::Buffer* objectBuffer = device->newBuffer(scene.objects.size() * sizeof(Sphere), MTL::ResourceStorageModeShared);
+    MTL::Buffer* materialsBuffer = device->newBuffer(scene.materials.size() * sizeof(Material), MTL::ResourceStorageModeShared);
     MTL::Buffer* sceneCountBuffer = device->newBuffer(sizeof(int), MTL::ResourceStorageModeShared);
     MTL::Buffer* accumulatedColorBuffer = device->newBuffer(sizeof(simd::float4) * width*height, MTL::ResourceStorageModeShared);
     MTL::Buffer* frameIndexBuffer = device->newBuffer(sizeof(int), MTL::ResourceStorageModeShared);
@@ -135,6 +152,7 @@ int main() {
         
         memcpy(cameraBuffer->contents(), r, sizeof(Ray));
         memcpy(objectBuffer->contents(), scene.objects.data(), scene.objects.size()*sizeof(Sphere)); //passes in by copy not reference
+        memcpy(materialsBuffer->contents(), scene.materials.data(), scene.materials.size()*sizeof(Material));
         memcpy(sceneCountBuffer->contents(), &sceneCount, sizeof(int));
         // memcpy(accumulatedColorBuffer->contents(), &accumulatedColor, sizeof(simd::float4)*width*height);
         memcpy(frameIndexBuffer->contents(), &frameIndex, sizeof(int));
@@ -145,9 +163,10 @@ int main() {
         encoder->setTexture(drawable->texture(), 0);
         encoder->setBuffer(cameraBuffer, 0, 0);
         encoder->setBuffer(objectBuffer, 0, 1);
-        encoder->setBuffer(sceneCountBuffer, 0, 2);
-        encoder->setBuffer(accumulatedColorBuffer, 0, 3);
-        encoder->setBuffer(frameIndexBuffer, 0, 4);
+        encoder->setBuffer(materialsBuffer, 0, 2);
+        encoder->setBuffer(sceneCountBuffer, 0, 3);
+        encoder->setBuffer(accumulatedColorBuffer, 0, 4);
+        encoder->setBuffer(frameIndexBuffer, 0, 5);
 
 
         encoder->dispatchThreads(MTL::Size(width, height, 1), MTL::Size(16, 16, 1));
