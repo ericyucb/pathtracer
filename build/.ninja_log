@@ -1,0 +1,9 @@
+# ninja log v7
+4	1127	1780727807419511645	CMakeFiles/MetalVSCodeProject.dir/main.cpp.o	fdaefcf16978b272
+1127	1224	1780727808542044997	MetalVSCodeProject	925d2de525785395
+5	1550	1780465750544785565	CMakeFiles/MetalVSCodeProject.dir/renderer.cpp.o	c592d306d5072f79
+2	95	1780587701101376095	build.ninja	53619eac9df7ff6e
+2	95	1780587701098850630	/Users/ericyu/Documents/raytracing/build/cmake_install.cmake	53619eac9df7ff6e
+5	504	1780693192785328463	CMakeFiles/MetalVSCodeProject.dir/camera.cpp.o	61945ca07cf13c86
+5	1321	1780727977354635160	CMakeFiles/MetalVSCodeProject.dir/main.cpp.o	fdaefcf16978b272
+1321	1425	1780727978670069443	MetalVSCodeProject	925d2de525785395

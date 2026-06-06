@@ -159,6 +159,8 @@ kernel void render_kernel(
     constant Ray& camera [[buffer(0)]],
     constant Sphere* objects [[buffer(1)]],
     constant int& sceneCount [[buffer(2)]],
+    device float4* accumulatedColor [[buffer(3)]],
+    constant int& frameIndex [[buffer(4)]],
     uint2 pos [[thread_position_in_grid]])
 {
     if (pos.x >= outTexture.get_width() || pos.y >= outTexture.get_height()) return;
@@ -185,7 +187,7 @@ kernel void render_kernel(
     float3 color = float3(0, 0, 0);
     int bounces = 2;
     float multiplier = 1.0f;
-    uint seed = pos.x + pos.y * outTexture.get_width();
+    uint seed = pos.x + pos.y * outTexture.get_width() + frameIndex * 719393u; //719... is a prime to encourage randomness 
 
     float3 lightDirection;
     float lightIntensity;
@@ -216,7 +218,10 @@ kernel void render_kernel(
             ray.direction = float4(reflect(ray.direction.xyz, diffuseDir), 0);
         }
     }
-    outTexture.write(float4(color,  1.0f), pos);
+    uint idx = outTexture.get_width() * pos.y + pos.x;
+    if (frameIndex == 1) accumulatedColor[idx] = float4(0);
+    accumulatedColor[idx] = float4(accumulatedColor[idx].xyz + color, 0);
+    outTexture.write(float4(accumulatedColor[idx].xyz / float(frameIndex), 1.0f), pos);
 
 
     

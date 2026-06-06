@@ -55,7 +55,7 @@ int main() {
 
 
     // 3. SDL window + Metal layer
-    uint32_t width = 1280, height = 720;
+    const uint32_t width = 1280, height = 720;
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window* window = SDL_CreateWindow("Raytracer",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -70,7 +70,6 @@ int main() {
     SDL_RaiseWindow(window);
 
     Camera camera(simd::float4{0.0f, 0.0f, 5.0f,0}, simd::float4{0.0f, 0.0f, -1.0f,0}, 0, 0);
-    MTL::Buffer* cameraBuffer = device->newBuffer(sizeof(Ray), MTL::ResourceStorageModeShared);
 
 
     Sphere s1;
@@ -98,8 +97,13 @@ int main() {
     scene.objects.push_back(s2);
     // scene.objects.push_back(s3);
 
+    int frameIndex = 1; //this represents how many frames we have accumulated, this is reset back to 1 whenever the camera moves 
+
+    MTL::Buffer* cameraBuffer = device->newBuffer(sizeof(Ray), MTL::ResourceStorageModeShared);
     MTL::Buffer* objectBuffer = device->newBuffer(scene.objects.size() * sizeof(Sphere), MTL::ResourceStorageModeShared);
     MTL::Buffer* sceneCountBuffer = device->newBuffer(sizeof(int), MTL::ResourceStorageModeShared);
+    MTL::Buffer* accumulatedColorBuffer = device->newBuffer(sizeof(simd::float4) * width*height, MTL::ResourceStorageModeShared);
+    MTL::Buffer* frameIndexBuffer = device->newBuffer(sizeof(int), MTL::ResourceStorageModeShared);
 
     // 4. Render loop
     bool running = true;
@@ -112,14 +116,14 @@ int main() {
         const int factor = 10.0f;
         const float speed = 0.05f;
         const uint8_t* keys = SDL_GetKeyboardState(nullptr);
-        if (keys[SDL_SCANCODE_W]) camera.moveZ(speed);
-        if (keys[SDL_SCANCODE_S]) camera.moveZ(-speed);
-        if (keys[SDL_SCANCODE_A]) camera.moveX(-speed);
-        if (keys[SDL_SCANCODE_D]) camera.moveX(speed);
-        if (keys[SDL_SCANCODE_UP]) camera.pitch(speed * factor);
-        if (keys[SDL_SCANCODE_DOWN]) camera.pitch(-speed * factor);
-        if (keys[SDL_SCANCODE_LEFT]) camera.yaw(-speed * factor);
-        if (keys[SDL_SCANCODE_RIGHT]) camera.yaw(speed * factor);
+        if (keys[SDL_SCANCODE_W]) { camera.moveZ(speed); frameIndex = 1;}
+        if (keys[SDL_SCANCODE_S]) { camera.moveZ(-speed); frameIndex = 1;}
+        if (keys[SDL_SCANCODE_A]) { camera.moveX(-speed); frameIndex = 1;}
+        if (keys[SDL_SCANCODE_D]) { camera.moveX(speed);  frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
+        if (keys[SDL_SCANCODE_UP]) { camera.pitch(speed * factor);  frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
+        if (keys[SDL_SCANCODE_DOWN]) { camera.pitch(-speed * factor);  frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
+        if (keys[SDL_SCANCODE_LEFT]) { camera.yaw(-speed * factor);  frameIndex = 1;memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
+        if (keys[SDL_SCANCODE_RIGHT]) { camera.yaw(speed * factor);  frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
 
         CA::MetalDrawable* drawable = layer->nextDrawable();
         if (!drawable) continue;
@@ -130,18 +134,29 @@ int main() {
         Ray* r = camera.getRay();
         
         memcpy(cameraBuffer->contents(), r, sizeof(Ray));
-        memcpy(objectBuffer->contents(), scene.objects.data(), scene.objects.size()*sizeof(Sphere));
+        memcpy(objectBuffer->contents(), scene.objects.data(), scene.objects.size()*sizeof(Sphere)); //passes in by copy not reference
         memcpy(sceneCountBuffer->contents(), &sceneCount, sizeof(int));
+        // memcpy(accumulatedColorBuffer->contents(), &accumulatedColor, sizeof(simd::float4)*width*height);
+        memcpy(frameIndexBuffer->contents(), &frameIndex, sizeof(int));
+
+
 
         encoder->setComputePipelineState(pipeline);
         encoder->setTexture(drawable->texture(), 0);
         encoder->setBuffer(cameraBuffer, 0, 0);
         encoder->setBuffer(objectBuffer, 0, 1);
         encoder->setBuffer(sceneCountBuffer, 0, 2);
+        encoder->setBuffer(accumulatedColorBuffer, 0, 3);
+        encoder->setBuffer(frameIndexBuffer, 0, 4);
+
+
         encoder->dispatchThreads(MTL::Size(width, height, 1), MTL::Size(16, 16, 1));
         encoder->endEncoding();
         cmdBuffer->presentDrawable(drawable);
         cmdBuffer->commit();
+
+        //update the frame index
+        frameIndex += 1;
     }
 
     // 5. Cleanup
