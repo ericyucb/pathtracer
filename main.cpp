@@ -76,10 +76,17 @@ int main() {
     Sphere s1;
     s1.positionAndRadius = simd_make_float4(0, 0, 0, 0.8f);
     s1.color = simd_make_float4(1, 0.2f, 0.2f, 0);
+    s1.roughness = 0.01;
+    
 
     Sphere s2;
-    s2.positionAndRadius = simd_make_float4(2, 0, 0, 0.8f);
-    s2.color = simd_make_float4(0.2f, 0.8f, 0.2f, 0);
+    s2.positionAndRadius = simd_make_float4(0, -101, 0, 100.0f);
+    s2.color = simd_make_float4(0.2f, 0.6f, 0.9f, 0);
+    s2.roughness = 0.01;
+
+
+
+    int sceneCount = 2;
 
     // Sphere s3;
     // s3.position = {0, -15, 0};
@@ -92,6 +99,7 @@ int main() {
     // scene.objects.push_back(s3);
 
     MTL::Buffer* objectBuffer = device->newBuffer(scene.objects.size() * sizeof(Sphere), MTL::ResourceStorageModeShared);
+    MTL::Buffer* sceneCountBuffer = device->newBuffer(sizeof(int), MTL::ResourceStorageModeShared);
 
     // 4. Render loop
     bool running = true;
@@ -123,11 +131,13 @@ int main() {
         
         memcpy(cameraBuffer->contents(), r, sizeof(Ray));
         memcpy(objectBuffer->contents(), scene.objects.data(), scene.objects.size()*sizeof(Sphere));
+        memcpy(sceneCountBuffer->contents(), &sceneCount, sizeof(int));
 
         encoder->setComputePipelineState(pipeline);
         encoder->setTexture(drawable->texture(), 0);
         encoder->setBuffer(cameraBuffer, 0, 0);
         encoder->setBuffer(objectBuffer, 0, 1);
+        encoder->setBuffer(sceneCountBuffer, 0, 2);
         encoder->dispatchThreads(MTL::Size(width, height, 1), MTL::Size(16, 16, 1));
         encoder->endEncoding();
         cmdBuffer->presentDrawable(drawable);

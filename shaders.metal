@@ -2,6 +2,26 @@
 using namespace metal;
 
 
+
+uint pcg(thread uint& state) {
+      uint prev = state * 747796405u + 2891336453u;
+      uint word = ((prev >> ((prev >> 28u) + 4u)) ^ prev) * 277803737u;
+      state = prev;
+      return (word >> 22u) ^ word;
+  };
+
+  float randFloat(thread uint& seed) {
+      return float(pcg(seed)) / 4294967296.0f; // [0, 1)
+  };
+
+  float3 randFloat3(thread uint& seed, float lo, float hi) {
+      return float3(
+          lo + randFloat(seed) * (hi - lo),
+          lo + randFloat(seed) * (hi - lo),
+          lo + randFloat(seed) * (hi - lo)
+      );
+  };
+
 // These are the two inputs the GPU passes into your kernel for each thread.
 
 //   texture2d<float, access::write> outTexture [[texture(0)]]
@@ -22,6 +42,9 @@ struct Ray {
 struct Sphere {
     float4 positionAndRadius;  // xyz = center, w = radius
     float4 color;              // xyz = rgb, w unused
+    float roughness;
+    float metallic;
+    float2 padding;
 };
 
 
@@ -58,14 +81,14 @@ metadata Miss(){
 
 
 };
-metadata TraceRay(thread Ray& ray, constant Sphere* objects){
+metadata TraceRay(thread Ray& ray, constant Sphere* objects, int count){
 
     float closestDistance = -1;
     int closestSphere = -1;
     float3 a = ray.position.xyz;
     float3 b = ray.direction.xyz;
 
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < count; i++) {
 
         Sphere object = objects[i];
         float3 center = object.positionAndRadius.xyz;
@@ -135,6 +158,7 @@ kernel void render_kernel(
     texture2d<float, access::write> outTexture [[texture(0)]],
     constant Ray& camera [[buffer(0)]],
     constant Sphere* objects [[buffer(1)]],
+    constant int& sceneCount [[buffer(2)]],
     uint2 pos [[thread_position_in_grid]])
 {
     if (pos.x >= outTexture.get_width() || pos.y >= outTexture.get_height()) return;
@@ -161,16 +185,21 @@ kernel void render_kernel(
     float3 color = float3(0, 0, 0);
     int bounces = 2;
     float multiplier = 1.0f;
+    uint seed = pos.x + pos.y * outTexture.get_width();
 
     float3 lightDirection;
     float lightIntensity;
     float3 sphereColor;
     for (int i = 0; i < bounces; i ++) {
 
-        metadata meta = TraceRay(ray, objects);
+        metadata meta = TraceRay(ray, objects, sceneCount);
 
         if (meta.distance < 0) {
+
+            float3 skyColor = {0.4f, 0.7f, 1.0f};
+            color +=  skyColor * multiplier * 0.2f;
             break;
+
         } else{
             lightDirection = normalize(float3(-1.0f, -1.0f, -1.0f));
 
@@ -181,8 +210,10 @@ kernel void render_kernel(
             color += lightIntensity * sphereColor * multiplier;
             multiplier *= 0.75f;
 
+            float roughness = objects[meta.sphereObject].roughness;
+            float3 diffuseDir = normalize(meta.worldNormal.xyz + roughness * randFloat3(seed, -1.0f, 1.0f));
             ray.position = meta.worldPosition + meta.worldNormal * 0.01;
-            ray.direction = float4(reflect(ray.direction.xyz, meta.worldNormal.xyz), 0);
+            ray.direction = float4(reflect(ray.direction.xyz, diffuseDir), 0);
         }
     }
     outTexture.write(float4(color,  1.0f), pos);

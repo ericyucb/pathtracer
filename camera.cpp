@@ -45,15 +45,14 @@ void Camera::updateDirection(){
     rotateY.columns[2][0] = std::sin(yAngle);
     rotateY.columns[2][2] = std::cos(yAngle);
 
-    ray -> direction = rotateY * simd::float4{0,0,-1,0};
-
     simd::float4x4 rotateX = matrix_identity_float4x4;
     rotateX.columns[0][0] = 1;
     rotateX.columns[1][1] = std::cos(xAngle);
     rotateX.columns[1][2] = std::sin(xAngle);
     rotateX.columns[2][1] = -std::sin(xAngle);
     rotateX.columns[2][2] = std::cos(xAngle);
-    ray -> direction = rotateX * ray->direction;
+    ray -> direction = rotateX * simd::float4{0,0,-1,0};
+    ray -> direction = rotateY * ray->direction;
 
 
 }
