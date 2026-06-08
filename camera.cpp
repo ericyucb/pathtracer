@@ -1,22 +1,20 @@
 #include "camera.h"
 #include <algorithm>
+#include <cmath>
 
-Camera::Camera(simd::float4 position, simd::float4 direction, float yaw, float pitch) {
-    ray = new Ray();
+Camera::Camera(simd::float4 position, simd::float4 direction, float yaw, float pitch) :
+ray(new Ray()), xAngle(pitch), yAngle(yaw) {
     ray->position = position;
     ray->direction = direction;
-    this->yAngle = yaw;
-    this->xAngle = pitch;
 }
 
+
 void Camera::moveX(float dx) {
-    simd::float3 forward = {ray->direction.x, ray->direction.y, ray->direction.z};
-    simd::float3 right = simd::normalize(simd::cross(forward, simd::float3{0, 1, 0}));
-    ray->position += simd::float4{right.x * dx, right.y * dx, right.z * dx, 0};
+    ray->position += simd::float4{right[0] * dx, right[1] * dx, right[2] * dx, 0};
 }
 
 void Camera::moveY(float dy) {
-    ray->position += simd::float4{0, dy, 0, 0};
+    ray->position += simd::float4{up[0] * dy, up[1] * dy, up[2] * dy, 0};    
 }
 
 void Camera::moveZ(float dz) {
@@ -25,18 +23,18 @@ void Camera::moveZ(float dz) {
 
 void Camera::yaw(float angle) {
     yAngle -= (angle * M_PI / 180.0f);
+    yAngle = fmod(yAngle, 2 * M_PI);
     updateDirection();
 }
 
 void Camera::pitch(float angle){
-    xAngle += (angle * M_PI / 180.0f);
-    float limit = (float)M_PI / 2.0f - 0.01f;
-    xAngle = std::max(-limit, std::min(limit, xAngle));
+    xAngle += (angle * M_PI / 180.0f); // gives the angle in radians
+    xAngle = fmod(xAngle, 2* M_PI); 
     updateDirection();
 }
 
 void Camera::updateDirection(){
-  
+
 
     simd::float4x4 rotateY = matrix_identity_float4x4;
     rotateY.columns[0][0] = std::cos(yAngle);
@@ -51,8 +49,15 @@ void Camera::updateDirection(){
     rotateX.columns[1][2] = std::sin(xAngle);
     rotateX.columns[2][1] = -std::sin(xAngle);
     rotateX.columns[2][2] = std::cos(xAngle);
+
+
     ray -> direction = rotateX * simd::float4{0,0,-1,0};
     ray -> direction = rotateY * ray->direction;
+
+    simd::float3 dir = simd_make_float3(ray->direction[0], ray->direction[1], ray->direction[2]);; //forward direction (should be normalized)
+    simd::float3 proj_up_dir = simd::dot(dir, simd::float3{0,1,0}) * dir; //the projection of up onto the new direction
+    up = simd::normalize(simd::float3{0, 1, 0} - proj_up_dir); //removes the foward component
+    right = simd::normalize(simd::cross(dir, up));
 
 
 }
@@ -60,3 +65,5 @@ void Camera::updateDirection(){
 Ray* Camera::getRay() {
     return ray;
 }
+
+

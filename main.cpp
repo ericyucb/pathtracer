@@ -69,7 +69,7 @@ int main() {
     layer->setDisplaySyncEnabled(true);
     SDL_RaiseWindow(window);
 
-    Camera camera(simd::float4{0.0f, 0.0f, 5.0f,0}, simd::float4{0.0f, 0.0f, -1.0f,0}, 0, 0);
+    Camera camera(simd::float4{0.0f, 0.0f, 5.0f,0}, simd::float4{0.0f, 0.0f, 1.0f,0}, 0, 0);
 
     Scene scene;
 
@@ -78,6 +78,13 @@ int main() {
     mObject.color = simd_make_float4(1, 0.2f, 0.2f, 0);
     mObject.roughness = 0.5f;
     scene.materials.push_back(mObject);
+
+
+    //green object reflective
+    Material mObjectReflective = {};
+    mObjectReflective.color = simd_make_float4(0.2f, 1, 0.2f, 0);
+    mObjectReflective.roughness = 0;
+    scene.materials.push_back(mObjectReflective);
 
     // grey ground
     Material mGround = {};
@@ -90,26 +97,33 @@ int main() {
     mLight.color = simd_make_float4(0, 0, 0, 0);
     mLight.roughness = 1.0f;
     mLight.emissionColor = simd_make_float4(1, 1, 1, 0);
-    mLight.emissionIntensity = 20.0f;
+    mLight.emissionIntensity = 35.0f;
     scene.materials.push_back(mLight);
 
     Sphere sObject;
     sObject.positionAndRadius = simd_make_float4(0, 0, 0, 0.8f);
     sObject.materialIndex = 0;
 
+    Sphere reflectiveObject;
+    reflectiveObject.positionAndRadius = simd_make_float4(2, 0, 0, 0.8f);
+    reflectiveObject.materialIndex = 1;
+
     Sphere sGround;
     sGround.positionAndRadius = simd_make_float4(0, -101, 0, 100.0f);
-    sGround.materialIndex = 1;
+    sGround.materialIndex = 2;
 
     Sphere sLight;
-    sLight.positionAndRadius = simd_make_float4(4, 3, 0, 2.5f); // light at 45 degrees, lower and larger
-    sLight.materialIndex = 2;
+    sLight.positionAndRadius = simd_make_float4(-10, 1, 0, 5.0f); // light at 45 degrees, lower and larger
+    sLight.materialIndex = 3;
 
-    int sceneCount = 3;
 
     scene.objects.push_back(sObject);
     scene.objects.push_back(sGround);
     scene.objects.push_back(sLight);
+    scene.objects.push_back(reflectiveObject);
+
+    int sceneCount = scene.objects.size();
+
     
     // scene.objects.push_back(s3);
 

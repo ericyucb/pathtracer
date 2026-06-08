@@ -4,23 +4,23 @@ using namespace metal;
 
 
 uint pcg(thread uint& state) {
-      uint prev = state * 747796405u + 2891336453u;
-      uint word = ((prev >> ((prev >> 28u) + 4u)) ^ prev) * 277803737u;
-      state = prev;
-      return (word >> 22u) ^ word;
-  };
+    uint prev = state * 747796405u + 2891336453u;
+    uint word = ((prev >> ((prev >> 28u) + 4u)) ^ prev) * 277803737u;
+    state = prev;
+    return (word >> 22u) ^ word;
+};
 
-  float randFloat(thread uint& seed) {
-      return float(pcg(seed)) / 4294967296.0f; // [0, 1)
-  };
+float randFloat(thread uint& seed) {
+    return float(pcg(seed)) / 4294967296.0f; // [0, 1)
+};
 
-  float3 randFloat3(thread uint& seed, float lo, float hi) {
-      return float3(
-          lo + randFloat(seed) * (hi - lo),
-          lo + randFloat(seed) * (hi - lo),
-          lo + randFloat(seed) * (hi - lo)
-      );
-  };
+float3 randFloat3(thread uint& seed, float lo, float hi) {
+    return float3(
+        lo + randFloat(seed) * (hi - lo),
+        lo + randFloat(seed) * (hi - lo),
+        lo + randFloat(seed) * (hi - lo)
+    );
+};
 
 // These are the two inputs the GPU passes into your kernel for each thread.
 
@@ -186,9 +186,9 @@ kernel void render_kernel(
     float fovScale = tan(fov * 0.5f * 3.14159f / 180.0f); // 60 degree FOV
     
     float3 a = camera.position.xyz;
-    float3 dir = camera.direction.xyz; //forward direction
-    float3 sub = float3(0,1,0) * dot(dir, float3(0,1,0)); //gives how much the up vector points in the forward direction
-    float3 up = normalize(float3(0, 1, 0) - sub); //removes the foward component
+    float3 dir = camera.direction.xyz; //forward direction (should be normalized)
+    float3 proj_up_dir = dot(dir, float3(0,1,0)) * dir; //the projection of up onto the new direction
+    float3 up = normalize(float3(0, 1, 0) - proj_up_dir); //removes the foward component
     float3 right = normalize(cross(dir, up));
     float3 b = normalize(dir + uv.x * fovScale * right + uv.y * fovScale * up); // move to the coordinate point in the new basis
     Ray ray;
@@ -196,7 +196,7 @@ kernel void render_kernel(
     ray.direction = float4(b, 0);
 
     float3 light = float3(0, 0, 0);
-    int bounces = 30;
+    int bounces = 5;
     float3 lightContribution = float3(1.0f, 1.0f, 1.0f);
 
     // float3 lightDirection;
@@ -212,30 +212,29 @@ kernel void render_kernel(
             break;
 
         } else{
-            // lightDirection = normalize(float3(-1.0f, -1.0f, -1.0f));
-
-            // lightIntensity = max(dot(-lightDirection, meta.worldNormal.xyz), 0.0f); //scaled between 0 and 1
+          
             int mat_idx = objects[meta.sphereObject].materialIndex;
             Material sphereMat = materials[mat_idx];
 
             // light += lightIntensity * sphereMat.color * multiplier;
             light += sphereMat.emissionIntensity * sphereMat.emissionColor.xyz * lightContribution;
 
-            // lightContribution *= 0.75f;
-            //
-//   The reason simple multiplication works is that we're treating color as a per-channel energy scale factor. Each RGB channel is an
-//   independent wavelength band, and the surface's albedo just says "what fraction of incoming energy survives this bounce per channel."
+        
+    //   The reason simple multiplication works is that we're treating color as a per-channel energy scale factor. Each RGB channel is an
+    //   independent wavelength band, and the surface's albedo just says "what fraction of incoming energy survives this bounce per channel."
             lightContribution *= sphereMat.color.xyz; // this can be interpreted as the light being absorbed by the sphere
-
-
             // perfect mirror reflection
-            float3 reflectDir = reflect(ray.direction.xyz, meta.worldNormal.xyz);
-            // fully random scatter around the normal (lambertian diffuse)
-            float3 randomDir = normalize(meta.worldNormal.xyz + randFloat3(seed, -1.0f, 1.0f));
+            float3 specularDir = reflect(ray.direction.xyz, meta.worldNormal.xyz);
+
+            // fully random scatter around the normal (cosine weighted ditribution)
+            float3 diffuseDir = normalize(meta.worldNormal.xyz + randFloat3(seed, -1.0f, 1.0f));
+           
             // blend between mirror and diffuse based on roughness (0 = mirror, 1 = fully diffuse)
-            float3 diffuseDir = normalize(mix(reflectDir, randomDir, sphereMat.roughness));
-            ray.position = meta.worldPosition + meta.worldNormal * 0.01;
-            ray.direction = float4(diffuseDir, 0);
+            float3 dir = mix(specularDir, diffuseDir, meta.roughness);
+
+            // calculate the new position and direction
+            ray.position = meta.worldPosition + meta.worldNormal * 0.01; 
+            ray.direction = float4(dir, 0);
         }
     }
     uint idx = outTexture.get_width() * pos.y + pos.x;
