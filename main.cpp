@@ -98,7 +98,7 @@ int main() {
     mLight.color = simd_make_float4(0, 0, 0, 0);
     mLight.roughness = 1.0f;
     mLight.emissionColor = simd_make_float4(1, 1, 1, 0);
-    mLight.emissionIntensity = 35.0f;
+    mLight.emissionIntensity = 120.0f;
     scene.materials.push_back(mLight);  // index 11
 
     for (int i = 0; i < 10; i++) {
@@ -117,6 +117,36 @@ int main() {
     sLight.positionAndRadius = simd_make_float4(0, 6, 0, 2.0f);
     sLight.materialIndex = 11;
     scene.objects.push_back(sLight);
+
+    // 5 glass spheres at z=2, in front of the colored backdrop at z=0
+    // IOR increases left to right: water -> glass -> dense glass -> crystal -> diamond
+    float iors[]  = { 1.33f, 1.5f, 1.7f, 2.0f, 2.4f };
+    float radii[] = { 0.55f, 0.5f, 0.45f, 0.4f, 0.35f };
+    float gap = 0.3f;
+
+    // compute center positions so surface-to-surface gaps are all equal
+    float totalWidth = 4.0f * gap;
+    for (int i = 0; i < 5; i++) totalWidth += 2.0f * radii[i];
+    float xpos[5];
+    float x = -totalWidth / 2.0f;
+    for (int i = 0; i < 5; i++) {
+        x += radii[i];       // advance to center
+        xpos[i] = x;
+        x += radii[i] + gap; // advance past right edge + gap
+    }
+
+    for (int i = 0; i < 5; i++) {
+        Material m = {};
+        m.isDielectric = true;
+        m.indexOfRefraction = iors[i];
+        scene.materials.push_back(m);  // indices 12-16
+
+        Sphere s;
+        s.positionAndRadius = simd_make_float4(xpos[i], -0.35f, 2.0f, radii[i]);
+        s.materialIndex = 12 + i;
+        scene.objects.push_back(s);
+    }
+
 
     int sceneCount = scene.objects.size();
 

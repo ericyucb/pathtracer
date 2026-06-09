@@ -17,8 +17,10 @@ struct Sphere {
       float emissionIntensity;
       float padding;
       float specularProbability;
-      float padding2;        // float4 needs 16-byte alignment
-  };
+      float indexOfRefraction;
+      int isDielectric;
+     
+};
 
 struct Scene {
     std::vector<Sphere> objects;

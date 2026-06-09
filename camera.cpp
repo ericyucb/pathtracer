@@ -6,7 +6,7 @@ Camera::Camera(simd::float4 position, simd::float4 direction, float yaw, float p
 ray(new Ray()), xAngle(pitch), yAngle(yaw) {
     ray->position = position;
     ray->direction = direction;
-    // updateDirection();
+    updateDirection();
 }
 
 
@@ -29,7 +29,7 @@ void Camera::yaw(float angle) {
 }
 
 void Camera::pitch(float angle){
-    xAngle += (angle * M_PI / 180.0f); // gives the angle in radians
+    xAngle -= (angle * M_PI / 180.0f); // gives the angle in radians
     xAngle = fmod(xAngle, 2* M_PI); 
     updateDirection();
 }

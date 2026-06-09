@@ -59,7 +59,8 @@ struct Ray {
       float emissionIntensity;
       float padding;
       float specularProbability;
-      float padding2;        // float4 needs 16-byte alignment
+      float indexOfRefraction;
+      int isDielectric;
   };
 
 struct Sphere {
@@ -74,6 +75,7 @@ struct metadata {
     int sphereObject;
     float4 worldPosition;
     float4 worldNormal;
+    Ray incomingRay;
 };
 
 
@@ -83,6 +85,7 @@ metadata Hit(thread Ray& ray, float hitDistance, int sphereIndex, constant Spher
     meta.distance = hitDistance;
     meta.sphereObject = sphereIndex;
     meta.worldPosition = ray.position + ray.direction * hitDistance;
+    meta.incomingRay = ray;
     
     float3 center = objects[sphereIndex].positionAndRadius.xyz;
 
@@ -174,6 +177,61 @@ metadata TraceRay(thread Ray& ray, constant Sphere* objects, int count){
 };
 
 
+float3 computeRefract(float n1, float n2, Ray i, float3 worldNormal);
+float schlick_approximation(float n1, float n2, Ray i, float3 worldNormal, float3 refractedRay);
+
+Ray hitGlass(float n1, float n2, thread uint& seed, metadata meta){ // this sends back either the reflected or refracted direction
+    Ray i = meta.incomingRay;
+    bool isOutside = dot(meta.incomingRay.direction.xyz, meta.worldNormal.xyz) < 0;
+    float3 normal = isOutside ? meta.worldNormal.xyz : -meta.worldNormal.xyz;
+    float n1_ = isOutside ? n1 : n2;
+    float n2_ = isOutside ? n2 : n1;
+    float3 refractedRay = computeRefract(n1_, n2_, i, normal);
+    float p = schlick_approximation(n1_, n2_, i, normal, refractedRay);
+    bool isReflection = p >= randFloat(seed) ? true : false;
+    
+    if (isReflection) {
+        i.direction = float4(reflect(i.direction.xyz, normal), 0);
+        i.position = meta.worldPosition + float4(normal * 0.001, 0);
+    } else {
+        i.direction = float4(refractedRay, 0);
+        // always use -normal: when entering normal is outward so -normal pushes inside,
+        // when exiting normal is inward so -normal pushes outside
+        i.position = meta.worldPosition - float4(normal * 0.001, 0);
+    }
+    return i;
+}
+
+//calculate the refract vector direction using snells law
+float3 computeRefract(float n1, float n2, Ray i, float3 worldNormal){
+    float refractionRatio = n1/n2;
+    float3 incident_i = i.direction.xyz;
+    float incident_i_y = dot(-incident_i, worldNormal); // this ensures we get a positive dot product since cos (theta) is always positive
+    float sin_square_term = pow(refractionRatio, 2) * (1- pow(incident_i_y, 2));
+    if (sin_square_term > 1){
+        return reflect(i.direction.xyz, worldNormal);
+    }
+    return refractionRatio * incident_i + worldNormal * (refractionRatio * incident_i_y - sqrt(1- sin_square_term));
+}
+
+
+
+// this tells you the fraction of light that gets reflected
+float schlick_approximation(float n1, float n2, Ray i, float3 worldNormal, float3 refractedRay){ //ray is the incident ray
+    float r0 = pow((n1-n2)/(n1+n2), 2);
+    float cosine_theta = dot(-i.direction.xyz, worldNormal);
+    if (n1 > n2 ){
+        float sinT2 = pow(n1 / n2, 2) * (1.0 - pow(cosine_theta, 2));
+        if (sinT2 > 1.0) return 1;  
+        cosine_theta = sqrt(1-sinT2);
+    }
+    return r0 + (1-r0) * pow(1 - cosine_theta, 5);
+}
+
+
+
+
+
 //aka per pixel
 kernel void render_kernel( 
     texture2d<float, access::write> outTexture [[texture(0)]],
@@ -198,7 +256,7 @@ kernel void render_kernel(
     //TODO move these hyperparameters into sphere class
     float fov = 45.0f;
     float fovScale = tan(fov * 0.5f * 3.14159f / 180.0f); // 60 degree FOV
-    float blur_coefficient = 0.03f;
+    float blur_coefficient = 0.0001f;
     float focalDistance = 5.0f;
     float3 focalPoint = camera.position.xyz + camera.direction.xyz * focalDistance;
     float2 jitter_depth = randomPointInCircle(seed) * blur_coefficient;
@@ -213,7 +271,7 @@ kernel void render_kernel(
     ray.direction = float4(b, 0);
 
     float3 light = float3(0, 0, 0);
-    int bounces = 5;
+    int bounces = 10;
     float3 lightContribution = float3(1.0f, 1.0f, 1.0f);
 
     // float3 lightDirection;
@@ -225,19 +283,23 @@ kernel void render_kernel(
         if (meta.distance < 0) {
 
             // float3 skyColor = {0.4f, 0.7f, 1.0f};
-            // light += skyColor * lightContribution * 0.2f;
+            // light += skyColor * lightContribution * 0.3f;
             break;
 
-        } else{
-          
-            int mat_idx = objects[meta.sphereObject].materialIndex;
-            Material sphereMat = materials[mat_idx];
+        }
+        
+        int mat_idx = objects[meta.sphereObject].materialIndex;
+        Material sphereMat = materials[mat_idx];
+
+        if (sphereMat.isDielectric) {
+            ray = hitGlass(1.0, sphereMat.indexOfRefraction, seed, meta);
+
+        } else {
 
             // light += lightIntensity * sphereMat.color * multiplier;
             light += sphereMat.emissionIntensity * sphereMat.emissionColor.xyz * lightContribution;
 
             bool isDiffuse = sphereMat.specularProbability < randFloat(seed); // materials has probability p of reflecting specular and 1-p of diffuse
-
 
     //   The reason simple multiplication works is that we're treating color as a per-channel energy scale factor. Each RGB channel is an
     //   independent wavelength band, and the surface's albedo just says "what fraction of incoming energy survives this bounce per channel."
@@ -259,6 +321,7 @@ kernel void render_kernel(
             // calculate the new position and direction
             ray.position = meta.worldPosition + meta.worldNormal * 0.01; 
             ray.direction = float4(dir, 0);
+
         }
     }
     uint idx = outTexture.get_width() * pos.y + pos.x;
@@ -267,11 +330,4 @@ kernel void render_kernel(
     float3 averaged = accumulatedColor[idx].xyz / float(frameIndex);
     float3 tonemapped = averaged / (averaged + 1.0f); // Reinhard tonemapping
     outTexture.write(float4(tonemapped, 1.0f), pos);
-
-
-    
-
-    
-   
-   
 }
