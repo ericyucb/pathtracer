@@ -6,6 +6,7 @@ Camera::Camera(simd::float4 position, simd::float4 direction, float yaw, float p
 ray(new Ray()), xAngle(pitch), yAngle(yaw) {
     ray->position = position;
     ray->direction = direction;
+    // updateDirection();
 }
 
 
@@ -51,7 +52,7 @@ void Camera::updateDirection(){
     rotateX.columns[2][2] = std::cos(xAngle);
 
 
-    ray -> direction = rotateX * simd::float4{0,0,-1,0};
+    ray -> direction = rotateX * simd::float4{0,0,1,0};
     ray -> direction = rotateY * ray->direction;
 
     simd::float3 dir = simd_make_float3(ray->direction[0], ray->direction[1], ray->direction[2]);; //forward direction (should be normalized)

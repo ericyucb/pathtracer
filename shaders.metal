@@ -11,16 +11,26 @@ uint pcg(thread uint& state) {
 };
 
 float randFloat(thread uint& seed) {
-    return float(pcg(seed)) / 4294967296.0f; // [0, 1)
+    return float(pcg(seed)) / 4294967296.0f;
 };
+
+float randFloat(thread uint& seed, float lo, float hi){
+    return lo + randFloat(seed) * (hi - lo);
+}
 
 float3 randFloat3(thread uint& seed, float lo, float hi) {
     return float3(
-        lo + randFloat(seed) * (hi - lo),
-        lo + randFloat(seed) * (hi - lo),
-        lo + randFloat(seed) * (hi - lo)
+        randFloat(seed, lo, hi),
+        randFloat(seed, lo, hi),
+        randFloat(seed, lo, hi)
     );
 };
+
+float2 randomPointInCircle(thread uint& seed) {
+    float angle = randFloat(seed) * 2 * 3.1415;
+    float2 pointOnCircle = float2(cos(angle), sin(angle));
+    return pointOnCircle * sqrt(randFloat(seed, 0, 1));
+}
 
 // These are the two inputs the GPU passes into your kernel for each thread.
 
@@ -39,14 +49,18 @@ struct Ray {
     float4 direction;
 };
 
-struct Material {
-    float4 color; // xyz = rgb, w unused
-    float roughness;
-    float metallic;
-    float4 emissionColor;
-    float emissionIntensity;
-    float padding;
-};
+
+
+  struct Material {
+      float4 color; // xyz = rgb, w unused
+      float roughness;
+      float metallic;
+      float4 emissionColor;
+      float emissionIntensity;
+      float padding;
+      float specularProbability;
+      float padding2;        // float4 needs 16-byte alignment
+  };
 
 struct Sphere {
     float4 positionAndRadius;  // xyz = center, w = radius
@@ -180,15 +194,18 @@ kernel void render_kernel(
     uv -= 1.0f;
     uv.x *= (float)outTexture.get_width() / (float)outTexture.get_height(); // aspect ratio fix
     uv.y = -uv.y; 
-    uv += float2(randFloat(seed) - 0.5f, randFloat(seed) - 0.5f) / float2(outTexture.get_width(),
-    outTexture.get_height());
-    float fov = 60.0f;
+    // uv += float2(randFloat(seed) - 0.5f, randFloat(seed) - 0.5f) / float2(outTexture.get_width(), outTexture.get_height()); //anti aliasing
+    //TODO move these hyperparameters into sphere class
+    float fov = 45.0f;
     float fovScale = tan(fov * 0.5f * 3.14159f / 180.0f); // 60 degree FOV
-    
-    float3 a = camera.position.xyz;
-    float3 dir = camera.direction.xyz; //forward direction (should be normalized)
-    float3 proj_up_dir = dot(dir, float3(0,1,0)) * dir; //the projection of up onto the new direction
-    float3 up = normalize(float3(0, 1, 0) - proj_up_dir); //removes the foward component
+    float blur_coefficient = 0.03f;
+    float focalDistance = 5.0f;
+    float3 focalPoint = camera.position.xyz + camera.direction.xyz * focalDistance;
+    float2 jitter_depth = randomPointInCircle(seed) * blur_coefficient;
+
+    float3 a = float3(camera.position.x + jitter_depth.x, camera.position.y + jitter_depth.y, camera.position.z); // depth of view
+    float3 dir = normalize(focalPoint- a); //forward direction (should be normalized)
+    float3 up = float3(0,1,0) - dot(float3(0,1,0), normalize(dir))* normalize(dir); //the projection of up onto the new direction
     float3 right = normalize(cross(dir, up));
     float3 b = normalize(dir + uv.x * fovScale * right + uv.y * fovScale * up); // move to the coordinate point in the new basis
     Ray ray;
@@ -219,7 +236,9 @@ kernel void render_kernel(
             // light += lightIntensity * sphereMat.color * multiplier;
             light += sphereMat.emissionIntensity * sphereMat.emissionColor.xyz * lightContribution;
 
-        
+            bool isDiffuse = sphereMat.specularProbability < randFloat(seed); // materials has probability p of reflecting specular and 1-p of diffuse
+
+
     //   The reason simple multiplication works is that we're treating color as a per-channel energy scale factor. Each RGB channel is an
     //   independent wavelength band, and the surface's albedo just says "what fraction of incoming energy survives this bounce per channel."
             lightContribution *= sphereMat.color.xyz; // this can be interpreted as the light being absorbed by the sphere
@@ -228,9 +247,14 @@ kernel void render_kernel(
 
             // fully random scatter around the normal (cosine weighted ditribution)
             float3 diffuseDir = normalize(meta.worldNormal.xyz + randFloat3(seed, -1.0f, 1.0f));
-           
             // blend between mirror and diffuse based on roughness (0 = mirror, 1 = fully diffuse)
-            float3 dir = mix(specularDir, diffuseDir, meta.roughness);
+            float3 dir; 
+
+            if (isDiffuse) {
+                dir = mix(specularDir, diffuseDir, sphereMat.roughness); // this is the general direction defined by roughness the more rough the less specular
+            } else{
+                dir = specularDir; // this represents a full specular reflection with a probability p
+            }
 
             // calculate the new position and direction
             ray.position = meta.worldPosition + meta.worldNormal * 0.01; 

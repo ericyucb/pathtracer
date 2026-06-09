@@ -55,72 +55,68 @@ int main() {
 
 
     // 3. SDL window + Metal layer
-    const uint32_t width = 2560, height = 1600;
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window* window = SDL_CreateWindow("Raytracer",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        width, height, SDL_WINDOW_METAL);
+        2560/2, 1600/2, SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI);
     SDL_MetalView view = SDL_Metal_CreateView(window);
     CA::MetalLayer* layer = (CA::MetalLayer*)SDL_Metal_GetLayer(view);
     layer->setDevice(device);
     layer->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
     layer->setFramebufferOnly(false);
-    layer->setDrawableSize(CGSizeMake(width, height));
     layer->setDisplaySyncEnabled(true);
     SDL_RaiseWindow(window);
+
+    int drawW, drawH;
+    SDL_Metal_GetDrawableSize(window, &drawW, &drawH);
+    layer->setDrawableSize(CGSizeMake(drawW, drawH));
+    const uint32_t width = (uint32_t)drawW, height = (uint32_t)drawH;
 
     Camera camera(simd::float4{0.0f, 0.0f, 5.0f,0}, simd::float4{0.0f, 0.0f, 1.0f,0}, 0, 0);
 
     Scene scene;
 
-    // red object sphere
-    Material mObject = {};
-    mObject.color = simd_make_float4(1, 0.2f, 0.2f, 0);
-    mObject.roughness = 0.5f;
-    scene.materials.push_back(mObject);
-
-
-    //green object reflective
-    Material mObjectReflective = {};
-    mObjectReflective.color = simd_make_float4(0.2f, 1, 0.2f, 0);
-    mObjectReflective.roughness = 0;
-    scene.materials.push_back(mObjectReflective);
+    // 10 spheres: roughness 0→1, specularProbability 1→0 (mirror to diffuse)
+    for (int i = 0; i < 10; i++) {
+        float t = i / 9.0f;
+        Material m = {};
+        m.color = simd_make_float4(0.8f, 0.8f, 0.8f, 0);
+        m.roughness = t;
+        m.specularProbability = 1.0f - t;
+        scene.materials.push_back(m);
+    }
 
     // grey ground
     Material mGround = {};
     mGround.color = simd_make_float4(0.4f, 0.4f, 0.4f, 0);
     mGround.roughness = 1.0f;
-    scene.materials.push_back(mGround);
+    mGround.specularProbability = 0.0f;
+    scene.materials.push_back(mGround);  // index 10
 
-    // white light source
+    // light source
     Material mLight = {};
     mLight.color = simd_make_float4(0, 0, 0, 0);
     mLight.roughness = 1.0f;
     mLight.emissionColor = simd_make_float4(1, 1, 1, 0);
     mLight.emissionIntensity = 35.0f;
-    scene.materials.push_back(mLight);
+    scene.materials.push_back(mLight);  // index 11
 
-    Sphere sObject;
-    sObject.positionAndRadius = simd_make_float4(0, 0, 0, 0.8f);
-    sObject.materialIndex = 0;
-
-    Sphere reflectiveObject;
-    reflectiveObject.positionAndRadius = simd_make_float4(2, 0, 0, 0.8f);
-    reflectiveObject.materialIndex = 1;
+    for (int i = 0; i < 10; i++) {
+        Sphere s;
+        s.positionAndRadius = simd_make_float4(-4.5f + i * 1.0f, 0, 0, 0.45f);
+        s.materialIndex = i;
+        scene.objects.push_back(s);
+    }
 
     Sphere sGround;
     sGround.positionAndRadius = simd_make_float4(0, -101, 0, 100.0f);
-    sGround.materialIndex = 2;
+    sGround.materialIndex = 10;
+    scene.objects.push_back(sGround);
 
     Sphere sLight;
-    sLight.positionAndRadius = simd_make_float4(-10, 1, 0, 5.0f); // light at 45 degrees, lower and larger
-    sLight.materialIndex = 3;
-
-
-    scene.objects.push_back(sObject);
-    scene.objects.push_back(sGround);
+    sLight.positionAndRadius = simd_make_float4(0, 6, 0, 2.0f);
+    sLight.materialIndex = 11;
     scene.objects.push_back(sLight);
-    scene.objects.push_back(reflectiveObject);
 
     int sceneCount = scene.objects.size();
 
