@@ -20,6 +20,8 @@
 #include "ray.h"
 #include "scene.h"
 
+using namespace simd;
+
 
 std::string ReadShaderSource(const std::string& filePath) {
     std::ifstream file(filePath);
@@ -72,93 +74,150 @@ int main() {
     layer->setDrawableSize(CGSizeMake(drawW, drawH));
     const uint32_t width = (uint32_t)drawW, height = (uint32_t)drawH;
 
-    Camera camera(simd::float4{0.0f, 0.0f, 5.0f,0}, simd::float4{0.0f, 0.0f, 1.0f,0}, 0, 0);
+    Camera camera(float4{0.0f, 0.0f, 5.0f,0}, float4{0.0f, 0.0f, 1.0f,0}, 0, 0, 45.0f, 0.001, 5.0f);
 
     Scene scene;
 
-    // 10 spheres: roughness 0→1, specularProbability 1→0 (mirror to diffuse)
-    for (int i = 0; i < 10; i++) {
-        float t = i / 9.0f;
-        Material m = {};
-        m.color = simd_make_float4(0.8f, 0.8f, 0.8f, 0);
-        m.roughness = t;
-        m.specularProbability = 1.0f - t;
-        scene.materials.push_back(m);
-    }
-
     // grey ground
     Material mGround = {};
-    mGround.color = simd_make_float4(0.4f, 0.4f, 0.4f, 0);
-    mGround.roughness = 1.0f;
-    mGround.specularProbability = 0.0f;
-    scene.materials.push_back(mGround);  // index 10
+    mGround.albetoAndRoughness = simd_make_float4(0.4f, 0.4f, 0.4f, 1.0f);
+    mGround.params = simd_make_float4(0, 0, 0, 0);
+    mGround.type = 0;
+    scene.materials.push_back(mGround);
+    int groundMaterialIndex = (int)scene.materials.size() - 1;
 
-    // light source
-    Material mLight = {};
-    mLight.color = simd_make_float4(0, 0, 0, 0);
-    mLight.roughness = 1.0f;
-    mLight.emissionColor = simd_make_float4(1, 1, 1, 0);
-    mLight.emissionIntensity = 120.0f;
-    scene.materials.push_back(mLight);  // index 11
-
-    for (int i = 0; i < 10; i++) {
-        Sphere s;
-        s.positionAndRadius = simd_make_float4(-4.5f + i * 1.0f, 0, 0, 0.45f);
-        s.materialIndex = i;
-        scene.objects.push_back(s);
-    }
-
-    Sphere sGround;
+    Sphere sGround = {};
     sGround.positionAndRadius = simd_make_float4(0, -101, 0, 100.0f);
-    sGround.materialIndex = 10;
-    scene.objects.push_back(sGround);
+    sGround.materialIndex = groundMaterialIndex;
+    scene.spheres.push_back(sGround);
 
-    Sphere sLight;
-    sLight.positionAndRadius = simd_make_float4(0, 6, 0, 2.0f);
-    sLight.materialIndex = 11;
-    scene.objects.push_back(sLight);
+    // a basic triangle mesh: a 2x2 diffuse panel made of two triangles, off to the side
+    Material mPanel = {};
+    mPanel.albetoAndRoughness = simd_make_float4(0.2f, 0.6f, 0.9f, 1.0f);
+    mPanel.params = simd_make_float4(0, 0, 0, 0);
+    mPanel.type = 0;
+    scene.materials.push_back(mPanel);  // index 17
+    int panelMaterialIndex = (int)scene.materials.size() - 1;
 
-    // 5 glass spheres at z=2, in front of the colored backdrop at z=0
-    // IOR increases left to right: water -> glass -> dense glass -> crystal -> diamond
-    float iors[]  = { 1.33f, 1.5f, 1.7f, 2.0f, 2.4f };
-    float radii[] = { 0.55f, 0.5f, 0.45f, 0.4f, 0.35f };
-    float gap = 0.3f;
+    Triangle t1 = {};
+    t1.p1 = simd_make_float3(-7.5f, 0.0f, 0.0f);
+    t1.p2 = simd_make_float3(-5.5f, 0.0f, 0.0f);
+    t1.p3 = simd_make_float3(-5.5f, 2.0f, 0.0f);
+    t1.materialIndex = panelMaterialIndex;
+    scene.triangles.push_back(t1);
 
-    // compute center positions so surface-to-surface gaps are all equal
-    float totalWidth = 4.0f * gap;
-    for (int i = 0; i < 5; i++) totalWidth += 2.0f * radii[i];
-    float xpos[5];
-    float x = -totalWidth / 2.0f;
-    for (int i = 0; i < 5; i++) {
-        x += radii[i];       // advance to center
-        xpos[i] = x;
-        x += radii[i] + gap; // advance past right edge + gap
-    }
+    Triangle t2 = {};
+    t2.p1 = simd_make_float3(-7.5f, 0.0f, 0.0f);
+    t2.p2 = simd_make_float3(-5.5f, 2.0f, 0.0f);
+    t2.p3 = simd_make_float3(-7.5f, 2.0f, 0.0f);
+    t2.materialIndex = panelMaterialIndex;
+    scene.triangles.push_back(t2);
 
-    for (int i = 0; i < 5; i++) {
-        Material m = {};
-        m.isDielectric = true;
-        m.indexOfRefraction = iors[i];
-        scene.materials.push_back(m);  // indices 12-16
+    // === A simple room (Cornell-box style) made of triangles, centered in front of the camera ===
+    float roomX0 = -3.0f, roomX1 = 3.0f;  // left / right walls
+    float roomY0 = -1.0f, roomY1 = 5.0f;  // floor / ceiling
+    float roomZ0 = 6.0f,  roomZ1 = 12.0f; // open front (near camera) / back wall
 
-        Sphere s;
-        s.positionAndRadius = simd_make_float4(xpos[i], -0.35f, 2.0f, radii[i]);
-        s.materialIndex = 12 + i;
-        scene.objects.push_back(s);
-    }
+    Material mWhite = {};
+    mWhite.albetoAndRoughness = simd_make_float4(0.73f, 0.73f, 0.73f, 1.0f);
+    mWhite.type = 0;
+    scene.materials.push_back(mWhite);
+    int whiteMat = (int)scene.materials.size() - 1;
 
+    Material mRed = {};
+    mRed.albetoAndRoughness = simd_make_float4(0.65f, 0.05f, 0.05f, 1.0f);
+    mRed.type = 0;
+    scene.materials.push_back(mRed);
+    int redMat = (int)scene.materials.size() - 1;
 
-    int sceneCount = scene.objects.size();
+    Material mGreen = {};
+    mGreen.albetoAndRoughness = simd_make_float4(0.12f, 0.45f, 0.15f, 1.0f);
+    mGreen.type = 0;
+    scene.materials.push_back(mGreen);
+    int greenMat = (int)scene.materials.size() - 1;
+
+    Material mRoomLight = {};
+    mRoomLight.albetoAndRoughness = simd_make_float4(0, 0, 0, 1.0f);
+    mRoomLight.emissionColor = simd_make_float4(1, 1, 1, 15.0f);
+    mRoomLight.type = 0;
+    scene.materials.push_back(mRoomLight);
+    int roomLightMat = (int)scene.materials.size() - 1;
+
+    auto addTri = [&](simd::float3 p1, simd::float3 p2, simd::float3 p3, int matIdx) {
+        Triangle t = {};
+        t.p1 = p1; t.p2 = p2; t.p3 = p3;
+        t.materialIndex = matIdx;
+        scene.triangles.push_back(t);
+    };
+
+    // Floor (normal +y)
+    addTri(simd_make_float3(roomX0, roomY0, roomZ0), simd_make_float3(roomX0, roomY0, roomZ1), simd_make_float3(roomX1, roomY0, roomZ0), whiteMat);
+    addTri(simd_make_float3(roomX1, roomY0, roomZ0), simd_make_float3(roomX0, roomY0, roomZ1), simd_make_float3(roomX1, roomY0, roomZ1), whiteMat);
+
+    // Ceiling (normal -y)
+    addTri(simd_make_float3(roomX0, roomY1, roomZ0), simd_make_float3(roomX1, roomY1, roomZ0), simd_make_float3(roomX0, roomY1, roomZ1), whiteMat);
+    addTri(simd_make_float3(roomX1, roomY1, roomZ0), simd_make_float3(roomX1, roomY1, roomZ1), simd_make_float3(roomX0, roomY1, roomZ1), whiteMat);
+
+    // Back wall (far side, normal -z, faces the camera through the open near side)
+    addTri(simd_make_float3(roomX0, roomY0, roomZ1), simd_make_float3(roomX0, roomY1, roomZ1), simd_make_float3(roomX1, roomY0, roomZ1), whiteMat);
+    addTri(simd_make_float3(roomX1, roomY0, roomZ1), simd_make_float3(roomX0, roomY1, roomZ1), simd_make_float3(roomX1, roomY1, roomZ1), whiteMat);
+
+    // Left wall (normal +x), red
+    addTri(simd_make_float3(roomX0, roomY0, roomZ0), simd_make_float3(roomX0, roomY1, roomZ0), simd_make_float3(roomX0, roomY0, roomZ1), redMat);
+    addTri(simd_make_float3(roomX0, roomY0, roomZ1), simd_make_float3(roomX0, roomY1, roomZ0), simd_make_float3(roomX0, roomY1, roomZ1), redMat);
+
+    // Right wall (normal -x), green
+    addTri(simd_make_float3(roomX1, roomY0, roomZ0), simd_make_float3(roomX1, roomY0, roomZ1), simd_make_float3(roomX1, roomY1, roomZ0), greenMat);
+    addTri(simd_make_float3(roomX1, roomY0, roomZ1), simd_make_float3(roomX1, roomY1, roomZ1), simd_make_float3(roomX1, roomY1, roomZ0), greenMat);
+
+    // Light panel inset into the ceiling (normal -y)
+    float lightInset = 1.0f;
+    float lightY = roomY1 - 0.02f;
+    addTri(simd_make_float3(roomX0 + lightInset, lightY, roomZ0 + lightInset), simd_make_float3(roomX1 - lightInset, lightY, roomZ0 + lightInset), simd_make_float3(roomX0 + lightInset, lightY, roomZ1 - lightInset), roomLightMat);
+    addTri(simd_make_float3(roomX1 - lightInset, lightY, roomZ0 + lightInset), simd_make_float3(roomX1 - lightInset, lightY, roomZ1 - lightInset), simd_make_float3(roomX0 + lightInset, lightY, roomZ1 - lightInset), roomLightMat);
+
+    // Two glass spheres on the floor inside the room
+    Material mGlass1 = {};
+    mGlass1.type = 1;
+    mGlass1.params = simd_make_float4(0, 0, 1.5f, 0);
+    scene.materials.push_back(mGlass1);
+    int glass1Mat = (int)scene.materials.size() - 1;
+
+    Material mGlass2 = {};
+    mGlass2.type = 1;
+    mGlass2.params = simd_make_float4(0, 0, 2.0f, 0);
+    scene.materials.push_back(mGlass2);
+    int glass2Mat = (int)scene.materials.size() - 1;
+
+    float roomMidZ = (roomZ0 + roomZ1) / 2.0f;
+
+    Sphere glassSphere1 = {};
+    glassSphere1.positionAndRadius = simd_make_float4(roomX0 + 1.5f, roomY0 + 1.0f, roomMidZ, 1.0f);
+    glassSphere1.materialIndex = glass1Mat;
+    scene.spheres.push_back(glassSphere1);
+
+    Sphere glassSphere2 = {};
+    glassSphere2.positionAndRadius = simd_make_float4(roomX1 - 1.5f, roomY0 + 1.0f, roomMidZ, 1.0f);
+    glassSphere2.materialIndex = glass2Mat;
+    scene.spheres.push_back(glassSphere2);
+
+    int sphereCount = scene.spheres.size();
+    int triangleCount = scene.triangles.size();
 
     
-    // scene.objects.push_back(s3);
 
     int frameIndex = 1; //this represents how many frames we have accumulated, this is reset back to 1 whenever the camera moves 
 
-    MTL::Buffer* cameraBuffer = device->newBuffer(sizeof(Ray), MTL::ResourceStorageModeShared);
-    MTL::Buffer* objectBuffer = device->newBuffer(scene.objects.size() * sizeof(Sphere), MTL::ResourceStorageModeShared);
+    MTL::Buffer* cameraBuffer = device->newBuffer(sizeof(CameraMetadata), MTL::ResourceStorageModeShared);
+    MTL::Buffer* sphereBuffer = device->newBuffer(scene.spheres.size() * sizeof(Sphere), MTL::ResourceStorageModeShared);
+    MTL::Buffer* sphereCountBuffer = device->newBuffer(sizeof(int), MTL::ResourceStorageModeShared);
+
+    MTL::Buffer* triangleBuffer = device->newBuffer(scene.triangles.size() * sizeof(Triangle), MTL::ResourceStorageModeShared);
+    MTL::Buffer* triangleCountBuffer = device->newBuffer(sizeof(int), MTL::ResourceStorageModeShared);
+
+    MTL::Buffer* meshBuffer = device->newBuffer(scene.meshes.size() * sizeof(Mesh), MTL::ResourceStorageModeShared);
+
     MTL::Buffer* materialsBuffer = device->newBuffer(scene.materials.size() * sizeof(Material), MTL::ResourceStorageModeShared);
-    MTL::Buffer* sceneCountBuffer = device->newBuffer(sizeof(int), MTL::ResourceStorageModeShared);
     MTL::Buffer* accumulatedColorBuffer = device->newBuffer(sizeof(simd::float4) * width*height, MTL::ResourceStorageModeShared);
     MTL::Buffer* frameIndexBuffer = device->newBuffer(sizeof(int), MTL::ResourceStorageModeShared);
 
@@ -188,26 +247,30 @@ int main() {
         MTL::CommandBuffer* cmdBuffer = commandQueue->commandBuffer();
         MTL::ComputeCommandEncoder* encoder = cmdBuffer->computeCommandEncoder();
         
-        Ray* r = camera.getRay();
-        
-        memcpy(cameraBuffer->contents(), r, sizeof(Ray));
-        memcpy(objectBuffer->contents(), scene.objects.data(), scene.objects.size()*sizeof(Sphere)); //passes in by copy not reference
+        CameraMetadata cameraMetadata = camera.getCameraStruct();
+
+        memcpy(cameraBuffer->contents(), &cameraMetadata, sizeof(CameraMetadata));
+        memcpy(sphereBuffer->contents(), scene.spheres.data(), scene.spheres.size()*sizeof(Sphere)); //passes in by copy not reference
+        memcpy(sphereCountBuffer->contents(), &sphereCount, sizeof(int));
+        memcpy(triangleBuffer->contents(), scene.triangles.data(), scene.triangles.size()*sizeof(Triangle)); //passes in by copy not reference
+        memcpy(triangleCountBuffer->contents(), &triangleCount, sizeof(int));
+        memcpy(meshBuffer->contents(), scene.meshes.data(), scene.meshes.size()*sizeof(Mesh)); //passes in by copy not reference
         memcpy(materialsBuffer->contents(), scene.materials.data(), scene.materials.size()*sizeof(Material));
-        memcpy(sceneCountBuffer->contents(), &sceneCount, sizeof(int));
-        // memcpy(accumulatedColorBuffer->contents(), &accumulatedColor, sizeof(simd::float4)*width*height);
         memcpy(frameIndexBuffer->contents(), &frameIndex, sizeof(int));
 
-
+        // memcpy(accumulatedColorBuffer->contents(), &accumulatedColor, sizeof(simd::float4)*width*height);
 
         encoder->setComputePipelineState(pipeline);
         encoder->setTexture(drawable->texture(), 0);
         encoder->setBuffer(cameraBuffer, 0, 0);
-        encoder->setBuffer(objectBuffer, 0, 1);
-        encoder->setBuffer(materialsBuffer, 0, 2);
-        encoder->setBuffer(sceneCountBuffer, 0, 3);
-        encoder->setBuffer(accumulatedColorBuffer, 0, 4);
-        encoder->setBuffer(frameIndexBuffer, 0, 5);
-
+        encoder->setBuffer(sphereBuffer, 0, 1);
+        encoder->setBuffer(sphereCountBuffer, 0, 2);
+        encoder->setBuffer(triangleBuffer, 0, 3);
+        encoder->setBuffer(triangleCountBuffer, 0, 4);
+        encoder->setBuffer(meshBuffer, 0, 5);
+        encoder->setBuffer(materialsBuffer, 0, 6);
+        encoder->setBuffer(frameIndexBuffer, 0, 7);
+        encoder->setBuffer(accumulatedColorBuffer, 0, 8);
 
         encoder->dispatchThreads(MTL::Size(width, height, 1), MTL::Size(16, 16, 1));
         encoder->endEncoding();

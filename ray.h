@@ -1,8 +1,8 @@
 #pragma once
 #include <simd/simd.h>
+using namespace simd;
 
-class Ray {
-    public:
-        simd::float4 position;
-        simd::float4 direction = simd::float4{0,0,1,0};
+struct Ray {
+    float4 position;
+    float4 direction = float4{0,0,1,0};
 };
