@@ -17,8 +17,8 @@
 
 #include "camera.h"
 
-#include "ray.h"
 #include "scene.h"
+#include "bvh.h"
 
 using namespace simd;
 
@@ -60,7 +60,7 @@ int main() {
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window* window = SDL_CreateWindow("Raytracer",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        2560/2, 1600/2, SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI);
+        0, 0, SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_FULLSCREEN_DESKTOP);
     SDL_MetalView view = SDL_Metal_CreateView(window);
     CA::MetalLayer* layer = (CA::MetalLayer*)SDL_Metal_GetLayer(view);
     layer->setDevice(device);
@@ -77,6 +77,7 @@ int main() {
     Camera camera(float4{0.0f, 0.0f, 5.0f,0}, float4{0.0f, 0.0f, 1.0f,0}, 0, 0, 45.0f, 0.001, 5.0f);
 
     Scene scene;
+
 
     // grey ground
     Material mGround = {};
@@ -203,7 +204,11 @@ int main() {
 
     int sphereCount = scene.spheres.size();
     int triangleCount = scene.triangles.size();
+    int meshCount = scene.meshes.size();
 
+    BVH bvh;
+    BVHData bvhData = bvh.buildBVH(scene.spheres.data(), scene.triangles.data(), sphereCount, triangleCount);
+    
     
 
     int frameIndex = 1; //this represents how many frames we have accumulated, this is reset back to 1 whenever the camera moves 
@@ -220,6 +225,23 @@ int main() {
     MTL::Buffer* materialsBuffer = device->newBuffer(scene.materials.size() * sizeof(Material), MTL::ResourceStorageModeShared);
     MTL::Buffer* accumulatedColorBuffer = device->newBuffer(sizeof(simd::float4) * width*height, MTL::ResourceStorageModeShared);
     MTL::Buffer* frameIndexBuffer = device->newBuffer(sizeof(int), MTL::ResourceStorageModeShared);
+
+    MTL::Buffer* meshCountBuffer = device->newBuffer(sizeof(int), MTL::ResourceStorageModeShared);
+
+    MTL::Buffer* bvhNodeBuffer = device->newBuffer(bvhData.bvhNodes.size() * sizeof(BVHNode), MTL::ResourceStorageModeShared);
+    MTL::Buffer* primitiveRefBuffer = device->newBuffer(bvhData.primitiveRef.size() * sizeof(PrimitiveRef), MTL::ResourceStorageModeShared);
+
+    memcpy(bvhNodeBuffer->contents(), bvhData.bvhNodes.data(), bvhData.bvhNodes.size() * sizeof(BVHNode)); // BVH is built once, so this only needs to happen once
+    memcpy(primitiveRefBuffer->contents(), bvhData.primitiveRef.data(), bvhData.primitiveRef.size() * sizeof(PrimitiveRef));
+
+    // scene geometry/materials are static, so these only need to be copied once
+    memcpy(sphereBuffer->contents(), scene.spheres.data(), scene.spheres.size()*sizeof(Sphere));
+    memcpy(sphereCountBuffer->contents(), &sphereCount, sizeof(int));
+    memcpy(triangleBuffer->contents(), scene.triangles.data(), scene.triangles.size()*sizeof(Triangle));
+    memcpy(triangleCountBuffer->contents(), &triangleCount, sizeof(int));
+    memcpy(meshBuffer->contents(), scene.meshes.data(), scene.meshes.size()*sizeof(Mesh));
+    memcpy(materialsBuffer->contents(), scene.materials.data(), scene.materials.size()*sizeof(Material));
+    memcpy(meshCountBuffer->contents(), &meshCount, sizeof(int));
 
     // 4. Render loop
     bool running = true;
@@ -250,15 +272,7 @@ int main() {
         CameraMetadata cameraMetadata = camera.getCameraStruct();
 
         memcpy(cameraBuffer->contents(), &cameraMetadata, sizeof(CameraMetadata));
-        memcpy(sphereBuffer->contents(), scene.spheres.data(), scene.spheres.size()*sizeof(Sphere)); //passes in by copy not reference
-        memcpy(sphereCountBuffer->contents(), &sphereCount, sizeof(int));
-        memcpy(triangleBuffer->contents(), scene.triangles.data(), scene.triangles.size()*sizeof(Triangle)); //passes in by copy not reference
-        memcpy(triangleCountBuffer->contents(), &triangleCount, sizeof(int));
-        memcpy(meshBuffer->contents(), scene.meshes.data(), scene.meshes.size()*sizeof(Mesh)); //passes in by copy not reference
-        memcpy(materialsBuffer->contents(), scene.materials.data(), scene.materials.size()*sizeof(Material));
         memcpy(frameIndexBuffer->contents(), &frameIndex, sizeof(int));
-
-        // memcpy(accumulatedColorBuffer->contents(), &accumulatedColor, sizeof(simd::float4)*width*height);
 
         encoder->setComputePipelineState(pipeline);
         encoder->setTexture(drawable->texture(), 0);
@@ -271,6 +285,9 @@ int main() {
         encoder->setBuffer(materialsBuffer, 0, 6);
         encoder->setBuffer(frameIndexBuffer, 0, 7);
         encoder->setBuffer(accumulatedColorBuffer, 0, 8);
+        encoder->setBuffer(meshCountBuffer, 0, 9);
+        encoder->setBuffer(bvhNodeBuffer, 0, 10);
+        encoder->setBuffer(primitiveRefBuffer, 0, 11);
 
         encoder->dispatchThreads(MTL::Size(width, height, 1), MTL::Size(16, 16, 1));
         encoder->endEncoding();

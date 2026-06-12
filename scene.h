@@ -9,7 +9,8 @@ struct Mesh{
     int firstTriangleIndex;
     int triangleCount;
     int materialIndex;
-    int padding[1];
+    float3 boundsMin;
+    float3 boundsMax;
 };
 
 struct Sphere{

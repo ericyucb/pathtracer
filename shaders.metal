@@ -2,6 +2,7 @@
 using namespace metal;
 
 
+//UTILS
 
 uint pcg(thread uint& state) {
     uint prev = state * 747796405u + 2891336453u;
@@ -16,7 +17,7 @@ float randFloat(thread uint& seed) {
 
 float randFloat(thread uint& seed, float lo, float hi){
     return lo + randFloat(seed) * (hi - lo);
-}
+};
 
 float3 randFloat3(thread uint& seed, float lo, float hi) {
     return float3(
@@ -30,20 +31,10 @@ float2 randomPointInCircle(thread uint& seed) {
     float angle = randFloat(seed) * 2 * 3.1415;
     float2 pointOnCircle = float2(cos(angle), sin(angle));
     return pointOnCircle * sqrt(randFloat(seed, 0, 1));
-}
+};
 
-// These are the two inputs the GPU passes into your kernel for each thread.
 
-//   texture2d<float, access::write> outTexture [[texture(0)]]
-//   - texture2d<float> — a 2D texture where each channel is a float
-//   - access::write — this thread can only write to it, not read
-//   - [[texture(0)]] — this is bound to texture slot 0, which is why encoder->setTexture(outputTexture, 0) uses slot 0 on the CPU side
-
-//   uint2 pos [[thread_position_in_grid]]
-//   - uint2 — a pair of unsigned integers (x, y)
-//   - [[thread_position_in_grid]] — Metal automatically fills this in with the pixel coordinate of the current thread. So for the thread handling pixel (42, 100), pos.x = 42 and pos.y = 100
-
-//   The [[ ]] syntax is Metal's way of marking special GPU-provided values. You don't pass these in yourself — Metal injects them automatically based on how the threads were dispatched.
+//shader_structs
 struct Ray {
     float4 position;
     float4 direction = float4{0,0,1,0};
@@ -53,7 +44,8 @@ struct Mesh{
     int firstTriangleIndex;
     int triangleCount;
     int materialIndex;
-    int padding[1];
+    float3 boundsMin;
+    float3 boundsMax;
 };
 
 struct Sphere{
@@ -67,10 +59,10 @@ struct Triangle{
     float3 p1, p2, p3; //each point (x, y, z), initialized in counterclockwise fashion, this takes up 16 * 3 bytes due to byte allignment
 
     int materialIndex;
-    int padding[3];
+    int meshIndex; //this references which mesh the triangle is part of
+    int padding[2];
 
 };
-
 
 
 struct Material {
@@ -102,7 +94,28 @@ struct CameraMetadata{
     int padding[1];
 };
 
+struct BVHNode { // each node should encode its bounding box as well as all primitives contained within it
+    float3 minP;
+    float3 maxP;
+    int firstPrimitiveIndex;
+    int primitiveCount;
+    int leftChildIndex; // if leftChildIndex = 0 it is a leaf
+};
 
+struct BVHPrimitive {
+    float3 centroid;
+    int objectType;
+    int objectIndex;
+    float3 minP;
+    float3 maxP;
+};
+
+struct PrimitiveRef {
+    int objectType;
+    int objectIndex;
+};
+
+//Helper Functions
 metadata Hit(thread Ray& ray, float hitDistance, int objectIndex, int objectType, device const Sphere* spheres, device const Triangle* triangles){
 
     metadata meta;
@@ -134,147 +147,153 @@ metadata Miss(){
     return meta;
 };
 
-metadata TraceRay(thread Ray& ray, device const Sphere* spheres, device const Triangle* triangles, device const Mesh* meshes,  int sphereCount, int triangleCount){
+void updateSphereDistance(float3 a, float3 b, int sphereIndex, device const Sphere* spheres, thread float& closestDistance, thread int& closestObject, thread int& closestObjectType) {
+
+    Sphere sphere = spheres[sphereIndex];
+    float3 center = sphere.positionAndRadius.xyz;
+    float r = sphere.positionAndRadius.w;
+
+    //Quadratic fomrula dot(b, b) t^2 + 2(dot(a, b) - dot(b, center)) t + c = 0
+    // c = dot(a, a) - 2 dot(a, center) + dot(center, center) - dot(r, r)
+
+    float squared_coefficient = dot(b, b);
+    float linear_coefficient = 2*(dot(a, b) - dot(b, center));
+    float constant_coefficient = dot(a, a) - 2 * dot(a, center) + dot(center, center) - r * r;
+
+    //solve for the discriminant to determine how many solutions there are
+    //discriminant = linear_coefficient^2 - 4 squared coefficient * constant coefficient
+
+    float discriminant = linear_coefficient * linear_coefficient - 4.0f * squared_coefficient * constant_coefficient;
+
+    // solve for t
+    
+    // float red =  0;
+    // float green =  204.0f/255.0f;
+    // float blue =  204.0f/255.0f;
+
+    float t1;
+    float t2;
+    // float3 h1;
+    // float3 h2;
+
+
+    if (discriminant >= 0) { // at least one solution -> fill in the pixel because that indicates an intersection
+        t1 = (-linear_coefficient - sqrt(discriminant))/ (2.0f*squared_coefficient);
+        t2 = (-linear_coefficient + sqrt(discriminant))/ (2.0f*squared_coefficient);
+        if (t1 > 0) {
+
+            if(closestDistance == -1 or t1 < closestDistance) {
+                closestDistance = t1;
+                closestObject = sphereIndex;
+                closestObjectType = 1;
+            }
+            
+        }else if (t2 > 0) {
+            if(closestDistance == -1 or t2 < closestDistance) {
+                closestDistance = t2;
+                closestObject = sphereIndex;
+                closestObjectType = 1;
+            }
+        } 
+
+    } 
+}
+
+void updateTriangleDistance(float3 a, float3 b, int triangleIndex, device const Triangle* triangles, thread float& closestDistance, thread int& closestObject, thread int& closestObjectType){
+    Triangle triangle = triangles[triangleIndex];
+    //first check for intersection with plane
+    float3 v1 = triangle.p2 - triangle.p1;
+    float3 v2 = triangle.p3 - triangle.p1;
+    float3 planeNormal =  normalize(cross(v1, v2));
+    if (dot(planeNormal, b) == 0) {
+        return;
+    }
+    //moller-trumble ray intersection
+    //O + tD = A + u(B-A) + v(C-A) where O = ray origin D= ray direction, A, B, C are points on triangle
+    //(B-A) = v1, (C-A) = v2
+    
+    //We are solving the system of equations, where u and v are the barycentric coordinates
+    //[-D v1 v2] @ [t u v] = O-A
+    //We can solve this using cramers rule leveraging the fact that the determinat of a 3x3 matrix is the triple product dot(x, cross(y, z))
+    //first check if it intersects with triangle at all, it doens't intersect if u or v are not within the range [0, 1]
+    float3 trianglePointA = triangle.p1;
+
+    float3 rayOriginMinusPointA = a - trianglePointA;
+
+    //find the determinant of [-D v1 v2] which reduces to the triple cross product
+    float detM = dot(-b, cross(v1, v2));
+
+    //solve for u first U = detu/detM
+    //detU = |[-D, O-A, v2]|
+    float detU = dot(-b, cross(rayOriginMinusPointA, v2));
+    float u = detU/detM;
+
+    if (u < 0 or u > 1) {
+        return;
+    }
+
+    //solve for v
+    //detV = |[-D, v1, O-A]|
+    float detV = dot(-b, cross(v1, rayOriginMinusPointA));
+    float v = detV/detM;
+
+    if (v<0 or v > 1){
+        return;
+    }
+
+    if (u + v > 1) {
+        return;
+    }
+
+    //solve for t
+    //detT = |[O-A, v1, v2]|
+    float detT = dot(rayOriginMinusPointA, cross(v1, v2));
+    float t = detT/detM;
+
+    //if t<0 the triangle is behind the camera
+    if (t < 0){
+        return;
+    }
+
+    float distance = t;
+
+    if (closestDistance == -1 or distance < closestDistance) {
+        closestDistance = distance;
+        closestObject = triangleIndex;
+        closestObjectType = 2;
+    }
+}
+
+// metadata TraceRay(thread Ray& ray, device const Sphere* spheres, device const Triangle* triangles, device const Mesh* meshes,  int sphereCount, int triangleCount){
     
 
-    float closestDistance = -1;
-    int closestObject = -1;
-    int closestObjectType;
-    float3 a = ray.position.xyz;
-    float3 b = ray.direction.xyz;
+//     float closestDistance = -1;
+//     int closestObject = -1;
+//     int closestObjectType;
+//     float3 a = ray.position.xyz;
+//     float3 b = ray.direction.xyz;
 
-    for (int i = 0; i < sphereCount; i++) {
+//     for (int sphereIndex = 0; sphereIndex < sphereCount; sphereIndex++) {
+//         updateSphereDistance(a, b, sphereIndex, closestDistance, closestObject, closestObjectType);
+//     }
 
-        Sphere sphere = spheres[i];
-        float3 center = sphere.positionAndRadius.xyz;
-        float r = sphere.positionAndRadius.w;
-       
-        //Quadratic fomrula dot(b, b) t^2 + 2(dot(a, b) - dot(b, center)) t + c = 0
-        // c = dot(a, a) - 2 dot(a, center) + dot(center, center) - dot(r, r)
+//     for (int triangleIndex = 0; triangleIndex < triangleCount; triangleIndex++){
+//        updateTriangleDistance(a, b, triangleIndex, closestDistance, closestObject, closestObjectType);
+//     }
 
-        float squared_coefficient = dot(b, b);
-        float linear_coefficient = 2*(dot(a, b) - dot(b, center));
-        float constant_coefficient = dot(a, a) - 2 * dot(a, center) + dot(center, center) - r * r;
+//     if(closestDistance >= 0) { //only render if we intersected some primitive
 
-        //solve for the discriminant to determine how many solutions there are
-        //discriminant = linear_coefficient^2 - 4 squared coefficient * constant coefficient
+//         metadata payload = Hit(ray, closestDistance, closestObject, closestObjectType, spheres, triangles);
+//         return payload;
 
-        float discriminant = linear_coefficient * linear_coefficient - 4.0f * squared_coefficient * constant_coefficient;
+//     } else{
 
-        // solve for t
-        
-        // float red =  0;
-        // float green =  204.0f/255.0f;
-        // float blue =  204.0f/255.0f;
+//         metadata payload = Miss();
+//         return payload;
 
-        float t1;
-        float t2;
-        // float3 h1;
-        // float3 h2;
+//     }
 
-
-        if (discriminant >= 0) { // at least one solution -> fill in the pixel because that indicates an intersection
-            t1 = (-linear_coefficient - sqrt(discriminant))/ (2.0f*squared_coefficient);
-            t2 = (-linear_coefficient + sqrt(discriminant))/ (2.0f*squared_coefficient);
-            if (t1 > 0) {
-
-                if(closestDistance == -1 or t1 < closestDistance) {
-                    closestDistance = t1;
-                    closestObject = i;
-                    closestObjectType = 1;
-                }
-                
-            }else if (t2 > 0) {
-                if(closestDistance == -1 or t2 < closestDistance) {
-                    closestDistance = t2;
-                    closestObject = i;
-                    closestObjectType = 1;
-                }
-            } 
-
-        } 
-    }
-
-    for (int i = 0; i < triangleCount; i++){
-        Triangle triangle = triangles[i];
-        //first check for intersection with plane
-        float3 v1 = triangle.p2 - triangle.p1;
-        float3 v2 = triangle.p3 - triangle.p1;
-        float3 planeNormal =  normalize(cross(v1, v2));
-        if (dot(planeNormal, ray.direction.xyz) == 0) {
-            continue;
-        }
-        //moller-trumble ray intersection
-        //O + tD = A + u(B-A) + v(C-A) where O = ray origin D= ray direction, A, B, C are points on triangle
-        //(B-A) = v1, (C-A) = v2
-        
-        //We are solving the system of equations, where u and v are the barycentric coordinates
-        //[-D v1 v2] @ [t u v] = O-A
-        //We can solve this using cramers rule leveraging the fact that the determinat of a 3x3 matrix is the triple product dot(x, cross(y, z))
-        //first check if it intersects with triangle at all, it doens't intersect if u or v are not within the range [0, 1]
-        float3 rayOrigin = ray.position.xyz;
-        float3 rayDirection = ray.direction.xyz;
-        float3 trianglePointA = triangle.p1;
-
-        float3 rayOriginMinusPointA = rayOrigin - trianglePointA;
-
-        //find the determinant of [-D v1 v2] which reduces to the triple cross product
-        float detM = dot(-rayDirection, cross(v1, v2));
-
-        //solve for u first U = detu/detM
-        //detU = |[-D, O-A, v2]|
-        float detU = dot(-rayDirection, cross(rayOriginMinusPointA, v2));
-        float u = detU/detM;
-
-        if (u < 0 or u > 1) {
-            continue;
-        }
-
-        //solve for v
-        //detV = |[-D, v1, O-A]|
-        float detV = dot(-rayDirection, cross(v1, rayOriginMinusPointA));
-        float v = detV/detM;
-
-        if (v<0 or v > 1){
-            continue;
-        }
-
-        if (u + v > 1) {
-            continue;
-        }
-
-        //solve for t
-        //detT = |[O-A, v1, v2]|
-        float detT = dot(rayOriginMinusPointA, cross(v1, v2));
-        float t = detT/detM;
-
-        //if t<0 the triangle is behind the camera
-        if (t < 0){
-            continue;
-        }
-
-        float distance = t;
-
-        if (closestDistance == -1 or distance < closestDistance) {
-            closestDistance = distance;
-            closestObject = i;
-            closestObjectType = 2;
-        }
-    }
-
-    if(closestDistance >= 0) { //only render if we intersected some sphere
-
-        metadata payload = Hit(ray, closestDistance, closestObject, closestObjectType, spheres, triangles);
-        return payload;
-
-    } else{
-
-        metadata payload = Miss();
-        return payload;
-
-    }
-
-};
+// };
 
 
 float3 computeRefract(float n1, float n2, Ray i, float3 worldNormal);
@@ -314,8 +333,6 @@ float3 computeRefract(float n1, float n2, Ray i, float3 worldNormal){
     return refractionRatio * incident_i + worldNormal * (refractionRatio * incident_i_y - sqrt(1- sin_square_term));
 }
 
-
-
 // this tells you the fraction of light that gets reflected
 float schlick_approximation(float n1, float n2, Ray i, float3 worldNormal, float3 refractedRay){ //ray is the incident ray
     float r0 = pow((n1-n2)/(n1+n2), 2);
@@ -328,18 +345,93 @@ float schlick_approximation(float n1, float n2, Ray i, float3 worldNormal, float
     return r0 + (1-r0) * pow(1 - cosine_theta, 5);
 }
 
+bool intersectBox(thread Ray* ray, float3 minP, float3 maxP, float3 ray_dir_recipricol){
+    float3 t_low = (minP-ray->position.xyz)*ray_dir_recipricol; // lowx lowy lowz
+    float3 t_high = (maxP-ray->position.xyz)*ray_dir_recipricol;
+    float3 t_close = min(t_low, t_high);
+    float3 t_far =  max(t_low, t_high);
+
+    float t_last_entry = max(t_close.x, max(t_close.y, t_close.z));
+    float t_first_exit = min(t_far.x, min(t_far.y, t_far.z));
+
+    if (t_last_entry < t_first_exit and t_first_exit > 0){
+        return true;
+    }
+    return false;
+    
+}
+
+metadata traceBVH(thread Ray* ray, device const PrimitiveRef* primitives, device const BVHNode* bvh, device const Sphere* spheres, device const Triangle* triangles) { //given a ray search through bvh and return the required nodes
+    //ray box intersection algorithm (slab method)
+    float closestDistance = -1;
+    int closestObject = -1;
+    int closestObjectType;
+    float3 a = ray->position.xyz;
+    float3 b = ray->direction.xyz;
+    
+    float3 ray_dir_recipricol = 1/ray->direction.xyz;
+
+    int stack[256];
+    int currIndex = 0;
+    stack[currIndex++] = 0; // add the root onto the stack
+
+
+    while(currIndex != 0) {
+        int currBVHNodeIndex = stack[--currIndex];
+        BVHNode curr = bvh[currBVHNodeIndex];
+        if (!intersectBox(ray, curr.minP, curr.maxP, ray_dir_recipricol)){
+            continue;
+        } else{
+            if (curr.leftChildIndex != 0) {
+                stack[currIndex++] = curr.leftChildIndex;
+                stack[currIndex++] = curr.leftChildIndex + 1;
+            }
+            if (curr.leftChildIndex == 0) { // leaf node
+                //keep track of all primitives 
+                for (int i = curr.firstPrimitiveIndex; i< curr.firstPrimitiveIndex + curr.primitiveCount; i++) {
+                    PrimitiveRef primitive =  primitives[i];
+                    if (primitive.objectType == 1) {
+                        int sphereIndex = primitive.objectIndex;
+                        updateSphereDistance(a, b, sphereIndex, spheres, closestDistance, closestObject, closestObjectType);
+                    } else if (primitive.objectType == 2) {
+                        int triangleIndex = primitive.objectIndex;
+                        updateTriangleDistance(a, b, triangleIndex, triangles, closestDistance, closestObject, closestObjectType);
+                    }
+                }
+            }
+            
+        }
+    }
+
+    if(closestDistance >= 0) { //only render if we intersected some primitive
+
+        metadata payload = Hit(*ray, closestDistance, closestObject, closestObjectType, spheres, triangles);
+        return payload;
+
+    } else{
+
+        metadata payload = Miss();
+        return payload;
+
+    }
+
+}
+
 //per pixel
 kernel void render_kernel(
-    texture2d<float, access::write> outTexture   [[texture(0)]],
+    texture2d<float, access::write> outTexture       [[texture(0)]],
     constant CameraMetadata&        camera           [[buffer(0)]],
-    device const Sphere*    spheres          [[buffer(1)]],
-    constant int&           sphereCount      [[buffer(2)]],
-    device const Triangle*  triangles        [[buffer(3)]],
-    constant int&           triangleCount    [[buffer(4)]],
-    device const Mesh*      meshes           [[buffer(5)]],
-    constant Material*      materials        [[buffer(6)]],
-    constant int&           frameIndex       [[buffer(7)]],
-    device float4*          accumulatedColor [[buffer(8)]],
+    device const Sphere*            spheres          [[buffer(1)]],
+    constant int&                   sphereCount      [[buffer(2)]],
+    device const Triangle*          triangles        [[buffer(3)]],
+    constant int&                   triangleCount    [[buffer(4)]],
+    device const Mesh*              meshes           [[buffer(5)]],
+    constant Material*              materials        [[buffer(6)]],
+    constant int&                   frameIndex       [[buffer(7)]],
+    device float4*                  accumulatedColor [[buffer(8)]],
+    constant int&                   meshCount        [[buffer(9)]],
+    device const BVHNode*           bvhNodes         [[buffer(10)]],
+    device const PrimitiveRef*      primitiveRef     [[buffer(11)]],
     uint2 pos [[thread_position_in_grid]])
 {
     if (pos.x >= outTexture.get_width() || pos.y >= outTexture.get_height()) return;
@@ -379,7 +471,9 @@ kernel void render_kernel(
     // float lightIntensity;
     for (int i = 0; i < bounces; i ++) {
 
-        metadata meta = TraceRay(ray, spheres, triangles, meshes, sphereCount, triangleCount);
+        metadata meta = traceBVH(&ray, primitiveRef, bvhNodes, spheres, triangles);
+        
+        // TraceRay(ray, spheres, triangles, meshes, sphereCount, triangleCount);
 
         if (meta.distance < 0) {
 
