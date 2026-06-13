@@ -19,6 +19,7 @@
 
 #include "scene.h"
 #include "bvh.h"
+#include "obj_loader.h"
 
 using namespace simd;
 
@@ -58,9 +59,14 @@ int main() {
 
     // 3. SDL window + Metal layer
     SDL_Init(SDL_INIT_VIDEO);
+
+ 
+    SDL_Rect displayBounds;
+    SDL_GetDisplayBounds(0, &displayBounds);
     SDL_Window* window = SDL_CreateWindow("Raytracer",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        0, 0, SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_FULLSCREEN_DESKTOP);
+        displayBounds.x, displayBounds.y,
+        displayBounds.w, displayBounds.h,
+        SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS);
     SDL_MetalView view = SDL_Metal_CreateView(window);
     CA::MetalLayer* layer = (CA::MetalLayer*)SDL_Metal_GetLayer(view);
     layer->setDevice(device);
@@ -68,53 +74,25 @@ int main() {
     layer->setFramebufferOnly(false);
     layer->setDisplaySyncEnabled(true);
     SDL_RaiseWindow(window);
+    SDL_SetWindowInputFocus(window); // borderless windows don't always get key focus on macOS
 
     int drawW, drawH;
     SDL_Metal_GetDrawableSize(window, &drawW, &drawH);
     layer->setDrawableSize(CGSizeMake(drawW, drawH));
     const uint32_t width = (uint32_t)drawW, height = (uint32_t)drawH;
 
-    Camera camera(float4{0.0f, 0.0f, 5.0f,0}, float4{0.0f, 0.0f, 1.0f,0}, 0, 0, 45.0f, 0.001, 5.0f);
+    int winW, winH;
+    SDL_GetWindowSize(window, &winW, &winH);
+    SDL_DisplayMode dm;
+    SDL_GetCurrentDisplayMode(SDL_GetWindowDisplayIndex(window), &dm);
+  
+
+    Camera camera(float4{0.0f, 0.0f, 5.0f,0}, float4{0.0f, 0.0f, 1.0f,0}, 0, 0, 45.0f, 0.07, 3.0f);
 
     Scene scene;
 
-
-    // grey ground
-    Material mGround = {};
-    mGround.albetoAndRoughness = simd_make_float4(0.4f, 0.4f, 0.4f, 1.0f);
-    mGround.params = simd_make_float4(0, 0, 0, 0);
-    mGround.type = 0;
-    scene.materials.push_back(mGround);
-    int groundMaterialIndex = (int)scene.materials.size() - 1;
-
-    Sphere sGround = {};
-    sGround.positionAndRadius = simd_make_float4(0, -101, 0, 100.0f);
-    sGround.materialIndex = groundMaterialIndex;
-    scene.spheres.push_back(sGround);
-
-    // a basic triangle mesh: a 2x2 diffuse panel made of two triangles, off to the side
-    Material mPanel = {};
-    mPanel.albetoAndRoughness = simd_make_float4(0.2f, 0.6f, 0.9f, 1.0f);
-    mPanel.params = simd_make_float4(0, 0, 0, 0);
-    mPanel.type = 0;
-    scene.materials.push_back(mPanel);  // index 17
-    int panelMaterialIndex = (int)scene.materials.size() - 1;
-
-    Triangle t1 = {};
-    t1.p1 = simd_make_float3(-7.5f, 0.0f, 0.0f);
-    t1.p2 = simd_make_float3(-5.5f, 0.0f, 0.0f);
-    t1.p3 = simd_make_float3(-5.5f, 2.0f, 0.0f);
-    t1.materialIndex = panelMaterialIndex;
-    scene.triangles.push_back(t1);
-
-    Triangle t2 = {};
-    t2.p1 = simd_make_float3(-7.5f, 0.0f, 0.0f);
-    t2.p2 = simd_make_float3(-5.5f, 2.0f, 0.0f);
-    t2.p3 = simd_make_float3(-7.5f, 2.0f, 0.0f);
-    t2.materialIndex = panelMaterialIndex;
-    scene.triangles.push_back(t2);
-
-    // === A simple room (Cornell-box style) made of triangles, centered in front of the camera ===
+  
+    // === Cornell box room enclosing the bunny ===
     float roomX0 = -3.0f, roomX1 = 3.0f;  // left / right walls
     float roomY0 = -1.0f, roomY1 = 5.0f;  // floor / ceiling
     float roomZ0 = 6.0f,  roomZ1 = 12.0f; // open front (near camera) / back wall
@@ -139,7 +117,7 @@ int main() {
 
     Material mRoomLight = {};
     mRoomLight.albetoAndRoughness = simd_make_float4(0, 0, 0, 1.0f);
-    mRoomLight.emissionColor = simd_make_float4(1, 1, 1, 15.0f);
+    mRoomLight.emissionColor = simd_make_float4(1, 1, 1, 50.0f);
     mRoomLight.type = 0;
     scene.materials.push_back(mRoomLight);
     int roomLightMat = (int)scene.materials.size() - 1;
@@ -177,30 +155,16 @@ int main() {
     addTri(simd_make_float3(roomX0 + lightInset, lightY, roomZ0 + lightInset), simd_make_float3(roomX1 - lightInset, lightY, roomZ0 + lightInset), simd_make_float3(roomX0 + lightInset, lightY, roomZ1 - lightInset), roomLightMat);
     addTri(simd_make_float3(roomX1 - lightInset, lightY, roomZ0 + lightInset), simd_make_float3(roomX1 - lightInset, lightY, roomZ1 - lightInset), simd_make_float3(roomX0 + lightInset, lightY, roomZ1 - lightInset), roomLightMat);
 
-    // Two glass spheres on the floor inside the room
-    Material mGlass1 = {};
-    mGlass1.type = 1;
-    mGlass1.params = simd_make_float4(0, 0, 1.5f, 0);
-    scene.materials.push_back(mGlass1);
-    int glass1Mat = (int)scene.materials.size() - 1;
+    // bunny material (glass)
+    Material mBunny = {};
+    mBunny.albetoAndRoughness = simd_make_float4(0.8f, 0.8f, 0.8f, 1.0f);
+    mBunny.params = simd_make_float4(0, 0, 1.5f, 0); // IOR = 1.5 (glass)
+    mBunny.type = 1; // dielectric
+    scene.materials.push_back(mBunny);
+    int bunnyMat = (int)scene.materials.size() - 1;
 
-    Material mGlass2 = {};
-    mGlass2.type = 1;
-    mGlass2.params = simd_make_float4(0, 0, 2.0f, 0);
-    scene.materials.push_back(mGlass2);
-    int glass2Mat = (int)scene.materials.size() - 1;
-
-    float roomMidZ = (roomZ0 + roomZ1) / 2.0f;
-
-    Sphere glassSphere1 = {};
-    glassSphere1.positionAndRadius = simd_make_float4(roomX0 + 1.5f, roomY0 + 1.0f, roomMidZ, 1.0f);
-    glassSphere1.materialIndex = glass1Mat;
-    scene.spheres.push_back(glassSphere1);
-
-    Sphere glassSphere2 = {};
-    glassSphere2.positionAndRadius = simd_make_float4(roomX1 - 1.5f, roomY0 + 1.0f, roomMidZ, 1.0f);
-    glassSphere2.materialIndex = glass2Mat;
-    scene.spheres.push_back(glassSphere2);
+    // bunny sits on the floor (roomY0), centered in the room
+    loadOBJ("/Users/ericyu/Documents/raytracing/bunny.obj", scene, bunnyMat, float3{0, -1.33f, 9}, 10.0f);
 
     int sphereCount = scene.spheres.size();
     int triangleCount = scene.triangles.size();
@@ -247,6 +211,8 @@ int main() {
     bool running = true;
     SDL_Event event;
     while (running) {
+        NS::AutoreleasePool* framePool = NS::AutoreleasePool::alloc()->init();
+
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) running = false;
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) running = false;
@@ -254,17 +220,25 @@ int main() {
         const int factor = 10.0f;
         const float speed = 0.05f;
         const uint8_t* keys = SDL_GetKeyboardState(nullptr);
-        if (keys[SDL_SCANCODE_W]) { camera.moveZ(speed); frameIndex = 1;}
-        if (keys[SDL_SCANCODE_S]) { camera.moveZ(-speed); frameIndex = 1;}
-        if (keys[SDL_SCANCODE_A]) { camera.moveX(-speed); frameIndex = 1;}
+        if (keys[SDL_SCANCODE_W]) { camera.moveZ(speed); frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
+        if (keys[SDL_SCANCODE_S]) { camera.moveZ(-speed); frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
+        if (keys[SDL_SCANCODE_A]) { camera.moveX(-speed); frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
         if (keys[SDL_SCANCODE_D]) { camera.moveX(speed);  frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
         if (keys[SDL_SCANCODE_UP]) { camera.pitch(speed * factor);  frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
         if (keys[SDL_SCANCODE_DOWN]) { camera.pitch(-speed * factor);  frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
         if (keys[SDL_SCANCODE_LEFT]) { camera.yaw(-speed * factor);  frameIndex = 1;memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
         if (keys[SDL_SCANCODE_RIGHT]) { camera.yaw(speed * factor);  frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height);}
 
+        // [ / ] adjust depth-of-field blur amount, - / = adjust focal distance
+        const float blurStep = 0.005f;
+        const float focalStep = 0.1f;
+        if (keys[SDL_SCANCODE_LEFTBRACKET]) { camera.adjustBlur(-blurStep); frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height); std::cout << "blur: " << camera.getBlurCoefficient() << "\n"; }
+        if (keys[SDL_SCANCODE_RIGHTBRACKET]) { camera.adjustBlur(blurStep); frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height); std::cout << "blur: " << camera.getBlurCoefficient() << "\n"; }
+        if (keys[SDL_SCANCODE_MINUS]) { camera.adjustFocalDistance(-focalStep); frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height); std::cout << "focal distance: " << camera.getFocalDistance() << "\n"; }
+        if (keys[SDL_SCANCODE_EQUALS]) { camera.adjustFocalDistance(focalStep); frameIndex = 1; memset(accumulatedColorBuffer->contents(), 0, sizeof(simd::float4) * width * height); std::cout << "focal distance: " << camera.getFocalDistance() << "\n"; }
+
         CA::MetalDrawable* drawable = layer->nextDrawable();
-        if (!drawable) continue;
+        if (!drawable) { framePool->release(); continue; }
 
         MTL::CommandBuffer* cmdBuffer = commandQueue->commandBuffer();
         MTL::ComputeCommandEncoder* encoder = cmdBuffer->computeCommandEncoder();
@@ -296,6 +270,7 @@ int main() {
 
         //update the frame index
         frameIndex += 1;
+        framePool->release();
     }
 
     // 5. Cleanup

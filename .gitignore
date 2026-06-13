@@ -1,5 +1,12 @@
 /.vscode
 build/
+.cache/
 *.tga
+*.log
 .DS_Store
 notes.txt
+bvh_test.cpp
+/bvh_test
+/myprogram
+/trace_test
+trace_test.cpp
