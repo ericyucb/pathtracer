@@ -182,14 +182,14 @@ void updateSphereDistance(float3 a, float3 b, int sphereIndex, device const Sphe
         t2 = (-linear_coefficient + sqrt(discriminant))/ (2.0f*squared_coefficient);
         if (t1 > 0) {
 
-            if(closestDistance == -1 or t1 < closestDistance) {
+            if(closestDistance == INFINITY or t1 < closestDistance) {
                 closestDistance = t1;
                 closestObject = sphereIndex;
                 closestObjectType = 1;
             }
             
         }else if (t2 > 0) {
-            if(closestDistance == -1 or t2 < closestDistance) {
+            if(closestDistance == INFINITY or t2 < closestDistance) {
                 closestDistance = t2;
                 closestObject = sphereIndex;
                 closestObjectType = 1;
@@ -257,7 +257,7 @@ void updateTriangleDistance(float3 a, float3 b, int triangleIndex, device const 
 
     float distance = t;
 
-    if (closestDistance == -1 or distance < closestDistance) {
+    if (closestDistance == INFINITY or distance < closestDistance) {
         closestDistance = distance;
         closestObject = triangleIndex;
         closestObjectType = 2;
@@ -345,25 +345,44 @@ float schlick_approximation(float n1, float n2, Ray i, float3 worldNormal, float
     return r0 + (1-r0) * pow(1 - cosine_theta, 5);
 }
 
-bool intersectBox(thread Ray* ray, float3 minP, float3 maxP, float3 ray_dir_recipricol){
-    float3 t_low = (minP-ray->position.xyz)*ray_dir_recipricol; // lowx lowy lowz
-    float3 t_high = (maxP-ray->position.xyz)*ray_dir_recipricol;
+// float intersectBoxDist(thread Ray* ray, float3 minP, float3 maxP, float3 ray_dir_recipricol){
+//     float3 t_low = (minP-ray->position.xyz)*ray_dir_recipricol; // lowx lowy lowz
+//     float3 t_high = (maxP-ray->position.xyz)*ray_dir_recipricol;
+//     float3 t_close = min(t_low, t_high);
+//     float3 t_far =  max(t_low, t_high);
+
+//     float t_last_entry = max(t_close.x, max(t_close.y, t_close.z));
+//     float t_first_exit = min(t_far.x, min(t_far.y, t_far.z));
+
+//     if (t_last_entry < t_first_exit){
+//         return t_last_entry;
+//     }
+//     return -1.0f;
+    
+// }
+
+float intersectBoxDist(thread Ray* ray, float3 minP, float3 maxP, float3 ray_dir_recipricol){
+    float3 t_low = (minP - ray->position.xyz) * ray_dir_recipricol;
+    float3 t_high = (maxP - ray->position.xyz) * ray_dir_recipricol;
+    
     float3 t_close = min(t_low, t_high);
     float3 t_far =  max(t_low, t_high);
 
     float t_last_entry = max(t_close.x, max(t_close.y, t_close.z));
     float t_first_exit = min(t_far.x, min(t_far.y, t_far.z));
 
-    if (t_last_entry < t_first_exit and t_first_exit > 0){
-        return true;
+    // Changed to <= to handle perfectly flat bounding boxes
+    if (t_last_entry <= t_first_exit && t_first_exit > 0.0f){
+        // THE FIX: If the entry point is behind us, but the exit is in front, 
+        // we are inside the box. Return 0.0f so it doesn't get culled!
+        return max(0.0, t_last_entry);
     }
-    return false;
-    
+    return -1.0f;
 }
 
 metadata traceBVH(thread Ray* ray, device const PrimitiveRef* primitives, device const BVHNode* bvh, device const Sphere* spheres, device const Triangle* triangles) { //given a ray search through bvh and return the required nodes
     //ray box intersection algorithm (slab method)
-    float closestDistance = -1;
+    float closestDistance = INFINITY;
     int closestObject = -1;
     int closestObjectType;
     float3 a = ray->position.xyz;
@@ -371,7 +390,7 @@ metadata traceBVH(thread Ray* ray, device const PrimitiveRef* primitives, device
     
     float3 ray_dir_recipricol = 1/ray->direction.xyz;
 
-    int stack[256];
+    int stack[64];
     int currIndex = 0;
     stack[currIndex++] = 0; // add the root onto the stack
 
@@ -379,12 +398,25 @@ metadata traceBVH(thread Ray* ray, device const PrimitiveRef* primitives, device
     while(currIndex != 0) {
         int currBVHNodeIndex = stack[--currIndex];
         BVHNode curr = bvh[currBVHNodeIndex];
-        if (!intersectBox(ray, curr.minP, curr.maxP, ray_dir_recipricol)){
+
+        float dist = intersectBoxDist(ray, curr.minP, curr.maxP, ray_dir_recipricol);
+        if (dist < 0.0f or dist > closestDistance){ // theres no point in searching further if we found a closer box previously
             continue;
         } else{
             if (curr.leftChildIndex != 0) {
-                stack[currIndex++] = curr.leftChildIndex;
-                stack[currIndex++] = curr.leftChildIndex + 1;
+                //if there is children nodes, make sure the closer box is checked first
+                BVHNode leftChild = bvh[curr.leftChildIndex];
+                float leftChildDist = intersectBoxDist(ray, leftChild.minP, leftChild.maxP, ray_dir_recipricol);
+                BVHNode rightChild = bvh[curr.leftChildIndex + 1];
+                float rightChildDist = intersectBoxDist(ray, rightChild.minP, rightChild.maxP, ray_dir_recipricol);
+                if (leftChildDist < rightChildDist) {
+                    stack[currIndex++] = curr.leftChildIndex + 1;
+                    stack[currIndex++] = curr.leftChildIndex;
+                } else {
+                    stack[currIndex++] = curr.leftChildIndex;
+                    stack[currIndex++] = curr.leftChildIndex + 1;
+                }
+                
             }
             if (curr.leftChildIndex == 0) { // leaf node
                 //keep track of all primitives 
@@ -403,7 +435,7 @@ metadata traceBVH(thread Ray* ray, device const PrimitiveRef* primitives, device
         }
     }
 
-    if(closestDistance >= 0) { //only render if we intersected some primitive
+    if(closestObject > -1) { //only render if we intersected some primitive
 
         metadata payload = Hit(*ray, closestDistance, closestObject, closestObjectType, spheres, triangles);
         return payload;
@@ -437,13 +469,13 @@ kernel void render_kernel(
     if (pos.x >= outTexture.get_width() || pos.y >= outTexture.get_height()) return;
     uint seed = pos.x + pos.y * outTexture.get_width() + frameIndex * 719393u; //719... is a prime to encourage randomness 
 
-    // scale coordinates to between -1, 1
-    float2 uv = float2(pos) / float2(outTexture.get_width(), outTexture.get_height());
+    // jitter the sample within the pixel (anti-aliasing), then scale coordinates to between -1, 1
+    float2 jitter = float2(randFloat(seed) - 0.5f, randFloat(seed) - 0.5f);
+    float2 uv = (float2(pos) + jitter) / float2(outTexture.get_width(), outTexture.get_height());
     uv *= 2.0f;
     uv -= 1.0f;
     uv.x *= (float)outTexture.get_width() / (float)outTexture.get_height(); // aspect ratio fix
-    uv.y = -uv.y; 
-    // uv += float2(randFloat(seed) - 0.5f, randFloat(seed) - 0.5f) / float2(outTexture.get_width(), outTexture.get_height()); //anti aliasing
+    uv.y = -uv.y;
     //TODO move these hyperparameters into sphere class
     float fov = camera.fov;
     float fovScale = tan(fov * 0.5f * 3.14159f / 180.0f); // 60 degree FOV
@@ -469,19 +501,17 @@ kernel void render_kernel(
 
     // float3 lightDirection;
     // float lightIntensity;
-    for (int i = 0; i < bounces; i ++) {
+    for (int i = 0; i < bounces; i++) {
 
         metadata meta = traceBVH(&ray, primitiveRef, bvhNodes, spheres, triangles);
         
-        // TraceRay(ray, spheres, triangles, meshes, sphereCount, triangleCount);
 
         if (meta.distance < 0) {
-
             // float3 skyColor = {0.4f, 0.7f, 1.0f};
             // light += skyColor * lightContribution * 0.3f;
             break;
-
         }
+
         int mat_idx;
         Material objectMaterial;
         if (meta.objectType == 1){
@@ -504,9 +534,7 @@ kernel void render_kernel(
         float materialType = objectMaterial.type;
         float3 rayDirection = ray.direction.xyz;
         
-
-
-        if (materialType == 1) { //checks if object is dielectric
+        if (materialType == 1) { //checks if object is dielectric (glass)
             ray = hitGlass(1.0, IOR, seed, meta);
 
         } else {
@@ -545,4 +573,5 @@ kernel void render_kernel(
     float3 averaged = accumulatedColor[idx].xyz / float(frameIndex);
     float3 tonemapped = averaged / (averaged + 1.0f); // Reinhard tonemapping
     outTexture.write(float4(tonemapped, 1.0f), pos);
+    // outTexture.write(float4(1.0, 0.0, 0.0, 1.0), pos);
 }
