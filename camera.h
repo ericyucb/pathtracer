@@ -43,4 +43,8 @@ class Camera{
         Ray* getRay();
         void updateDirection();
         CameraMetadata getCameraStruct();
+        void adjustBlur(float delta);
+        void adjustFocalDistance(float delta);
+        float getBlurCoefficient() const;
+        float getFocalDistance() const;
 };

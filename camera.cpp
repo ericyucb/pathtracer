@@ -79,4 +79,20 @@ CameraMetadata Camera::getCameraStruct(){
     return cameraMetadata;
 }
 
+void Camera::adjustBlur(float delta) {
+    blurCoefficient = std::max(0.0f, blurCoefficient + delta);
+}
+
+void Camera::adjustFocalDistance(float delta) {
+    focalDistance = std::max(0.01f, focalDistance + delta);
+}
+
+float Camera::getBlurCoefficient() const {
+    return blurCoefficient;
+}
+
+float Camera::getFocalDistance() const {
+    return focalDistance;
+}
+
 
