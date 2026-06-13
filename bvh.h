@@ -4,7 +4,6 @@
 using namespace simd;
 using namespace std;
 
-//we would have an array containing all nodes
 struct BVHNode { // each node should encode its bounding box as well as all primitives contained within it
     float3 minP;
     float3 maxP;
@@ -22,6 +21,7 @@ struct BVHPrimitive {
     int objectType;
 };
 
+//this is used by the gpu only
 struct PrimitiveRef{
     int objectType;
     int objectIndex;
@@ -75,6 +75,81 @@ class BVH{
             bvhNode.maxP = maxP;
         }
 
+        // float calculateSAHCost(BVHNode parent, float splitProportion, float3 minP, float3 maxP, float3 diff, int axis, int leftCount){
+        //     float3 leftMax = maxP;
+        //     leftMax[axis] = minP[axis] + diff[axis] * splitProportion;
+        //     float3 leftLengths = leftMax - minP;
+        //     float surfaceAreaLeft = 2*(leftLengths[0] * leftLengths[1]) + 2*(leftLengths[1] * leftLengths[2]) + 2*(leftLengths[0] * leftLengths[2]);
+        //     //find the area of the right rectangular prism
+        //     float3 rightMin = minP;
+        //     rightMin[axis] += diff[axis] * splitProportion;
+        //     float3 rightLengths = maxP - rightMin;
+        //     float surfaceAreaRight = 2*(rightLengths[0]* rightLengths[1]) + 2*(rightLengths[1]*rightLengths[2]) + 2*(rightLengths[0]*rightLengths[2]);
+        //     //find the # of elements in the right rectangular prism
+        //     int rightCount = parent.primitiveCount - leftCount;
+
+        //     float SAHCost = surfaceAreaLeft*(float)leftCount + surfaceAreaRight*(float)rightCount;
+        //     return SAHCost;
+        // }
+
+        pair<float, int> evaluateSplit(BVHPrimitive* primitives, BVHNode& parent, float splitPoint, int axis){ //returns left Count
+            int leftCount = 0;
+            int rightCount = 0;
+            float3 leftMinP = float3(1e30f);
+            float3 leftMaxP = float3(-1e30f);
+            float3 rightMinP = float3(1e30f);
+            float3 rightMaxP = float3(-1e30f);
+
+            for (int i = parent.firstPrimitiveIndex; i<parent.firstPrimitiveIndex + parent.primitiveCount; i++) {
+            
+                if (primitives[i].centroid[axis] < splitPoint) {
+                    leftCount += 1;
+                    leftMinP = simd::min(leftMinP, primitives[i].minP);
+                    leftMaxP = simd::max(leftMaxP, primitives[i].maxP);
+                    
+                } else {
+                    rightCount += 1;
+                    rightMinP = simd::min(rightMinP, primitives[i].minP);
+                    rightMaxP = simd::max(rightMaxP, primitives[i].maxP);
+                }
+            
+            }
+
+            float surfaceAreaLeft = 0.0f;
+            float surfaceAreaRight = 0.0f;
+
+            // Fix #4: Protect against empty splits causing Inf/NaN math
+            if (leftCount > 0) {
+                float3 leftLengths = leftMaxP - leftMinP;
+                surfaceAreaLeft = 2*(leftLengths[0] * leftLengths[1]) + 2*(leftLengths[1] * leftLengths[2]) + 2*(leftLengths[0] * leftLengths[2]);
+            }
+            
+            if (rightCount > 0) {
+                float3 rightLengths = rightMaxP - rightMinP;
+                surfaceAreaRight = 2*(rightLengths[0]* rightLengths[1]) + 2*(rightLengths[1]*rightLengths[2]) + 2*(rightLengths[0]*rightLengths[2]);
+            }
+
+            return {leftCount * surfaceAreaLeft + rightCount * surfaceAreaRight, leftCount};
+         
+        }
+
+        void split(vector<BVHPrimitive> &primitives, BVHNode& parent, float splitPoint, int axis){
+            int leftIndex = parent.firstPrimitiveIndex;
+            for (int i = parent.firstPrimitiveIndex; i < parent.firstPrimitiveIndex + parent.primitiveCount; i++) {
+                if (primitives[i].centroid[axis] < splitPoint and i == leftIndex) {
+                    leftIndex += 1;
+                    continue;
+                } else if(primitives[i].centroid[axis] < splitPoint and i != leftIndex) {
+                    BVHPrimitive temp = primitives[leftIndex];
+                    primitives[leftIndex] = primitives[i];
+                    primitives[i] = temp;
+                    leftIndex += 1;
+                }
+            }
+        }
+
+      
+
     public:
         BVHData buildBVH(Sphere* spheres, Triangle* triangles, int sphereCount, int triangleCount){
             vector<BVHPrimitive> primitives = buildPrimitive(spheres, triangles, sphereCount, triangleCount); // this gets you a vector of all BVHPrimitive primitives
@@ -91,50 +166,62 @@ class BVH{
             std::queue<int> bfsQueue;
             bfsQueue.push(0);
 
-
-            while (bfsQueue.size() != 0) {
+            int size = 1;
+            int depth = 1;
+            while (bfsQueue.size() != 0 and depth <= 20) {
                 int parentIndex = bfsQueue.front();
                 BVHNode& parent = bvhNodes[parentIndex];
                 bfsQueue.pop();
 
-                if (parent.primitiveCount <= 5) {
-                    continue;
+                size -= 1;
+                if (size == 0) {
+                    depth += 1;
+                    size = bfsQueue.size();
                 }
+
                 float3 minP = parent.minP;
                 float3 maxP = parent.maxP;
                 float3 diff = maxP - minP;
 
-                //this finds the axis to split on
-                int axis = 0;
-                if (diff[1] > diff[axis]) {
-                    axis = 1;
+                //for each axis
+                //evaluate 10 splits
+                //choose best split using sah
+                int maxSplits = 10;
+                int bestAxis = 0;
+                int bestLeftCount = 0;
+                float bestSplitPoint = minP[0] + diff[0] * 0.1f;
+                float bestSAHCost = std::numeric_limits<float>::infinity();
+
+                for (int axis=0; axis<3; axis++){
+                    for (int split=1; split  <= maxSplits; split++){
+                        //evaluates one split
+                        float splitProportion = (float)split/maxSplits;
+                        float splitPoint = minP[axis] + diff[axis] * splitProportion;
+                        //find the # of elements in the left rectangular prism
+                        auto [SAHCost, leftCount] = evaluateSplit(primitives.data(), parent, splitPoint, axis);
+                        //find the area of the left rectangular prism
+                        // float SAHCost = calculateSAHCost(parent, splitProportion, minP, maxP, diff, axis, leftCount);
+
+                        if (SAHCost < bestSAHCost) {
+                            bestSAHCost = SAHCost;
+                            bestAxis = axis;
+                            bestSplitPoint = splitPoint;
+                            bestLeftCount = leftCount;
+                        }
+                    }
                 }
-                if (diff[2] > diff[axis]){
-                    axis = 2;
+                //sah cost of parent
+                float parentSAHCost = 2*(diff[0] * diff[1] + diff[1]* diff[2] + diff[0]*diff[2]) * parent.primitiveCount;
+                if (bestSAHCost > parentSAHCost || bestLeftCount == 0 || bestLeftCount == parent.primitiveCount) {
+                    continue; // degenerate split, leave as a leaf
                 }
 
-            
-                float3 splitPosition = minP + diff[axis] * 0.5f;
-                int leftPointer = parent.firstPrimitiveIndex;
-                for (int i = parent.firstPrimitiveIndex; i < parent.firstPrimitiveIndex + parent.primitiveCount; i++) {
-                    if (primitives[i].centroid[axis] < splitPosition[axis] and i == leftPointer) {
-                        leftPointer += 1;
-                        continue;
-                    }
-                    if (primitives[i].centroid[axis] < splitPosition[axis] and i != leftPointer) {
-                        BVHPrimitive temp = primitives[leftPointer];
-                        primitives[leftPointer] = primitives[i];
-                        primitives[i] = temp;
-                        leftPointer += 1;
-                    }
-                }
+                split(primitives, parent, bestSplitPoint, bestAxis);
+
 
                 BVHNode leftChild;
                 leftChild.firstPrimitiveIndex = parent.firstPrimitiveIndex;
-                leftChild.primitiveCount = leftPointer - parent.firstPrimitiveIndex;
-                if (leftChild.primitiveCount == 0 || leftChild.primitiveCount == parent.primitiveCount){ // this is to prevent infinite recursion cases
-                    continue;
-                }
+                leftChild.primitiveCount = bestLeftCount;
                 leftChild.leftChildIndex = 0;
                 int leftChildIndex = nodesUsed++;
                 bvhNodes[leftChildIndex] = leftChild;
@@ -151,9 +238,9 @@ class BVH{
                 bfsQueue.push(rightChildIndex);
 
                 parent.leftChildIndex = leftChildIndex;
-                // parent.rightChildIndex = rightChildIndex;
 
             }
+
             vector<PrimitiveRef> primitivesRef(sphereCount + triangleCount);
             for (int i = 0; i < sphereCount + triangleCount; i++) {
                 PrimitiveRef curr;
